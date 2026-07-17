@@ -238,49 +238,92 @@ async function fetchDataPointsPage(
   return res.json()
 }
 
+function toCamelCase(kebab: string) {
+  return kebab.replace(/-([a-z])/g, (_, c) => c.toUpperCase())
+}
+
+function dateFromParts(d?: { year: number; month: number; day: number }) {
+  if (!d) return undefined
+  return new Date(Date.UTC(d.year, d.month - 1, d.day))
+}
+
+function durationMinutes(interval?: { startTime?: string; endTime?: string }) {
+  if (!interval?.startTime || !interval?.endTime) return undefined
+  return (new Date(interval.endTime).getTime() - new Date(interval.startTime).getTime()) / 60_000
+}
+
+function sumActiveMinutes(byLevel?: Array<{ activeMinutes?: string }>) {
+  if (!byLevel) return undefined
+  return byLevel.reduce((sum, x) => sum + Number(x.activeMinutes ?? 0), 0)
+}
+
+const num = (v: unknown) => (v == null ? undefined : Number(v))
+
+// Per-type value/unit extraction — confirmed against real payloads returned
+// by the live API (field names are not consistent across types: e.g.
+// distance uses `millimeters` but height uses `heightMillimeters`). Types
+// without a confirmed shape (no data yet to inspect, e.g. weight/body-fat)
+// fall through to the generic guess below.
+const VALUE_EXTRACTORS: Partial<Record<DataType, (body: any) => { value?: number; unit?: string }>> = {
+  'heart-rate': (b) => ({ value: num(b.beatsPerMinute), unit: 'bpm' }),
+  'daily-resting-heart-rate': (b) => ({ value: num(b.beatsPerMinute), unit: 'bpm' }),
+  'heart-rate-variability': (b) => ({ value: b.rootMeanSquareOfSuccessiveDifferencesMilliseconds, unit: 'ms' }),
+  'daily-heart-rate-variability': (b) => ({ value: b.rootMeanSquareOfSuccessiveDifferencesMilliseconds, unit: 'ms' }),
+  'oxygen-saturation': (b) => ({ value: b.percentage, unit: '%' }),
+  'daily-oxygen-saturation': (b) => ({ value: b.percentage, unit: '%' }),
+  steps: (b) => ({ value: num(b.count), unit: 'steps' }),
+  distance: (b) => ({ value: b.millimeters != null ? num(b.millimeters)! / 1000 : undefined, unit: 'm' }),
+  height: (b) => ({ value: b.heightMillimeters != null ? num(b.heightMillimeters)! / 1000 : undefined, unit: 'm' }),
+  weight: (b) => ({ value: num(b.weightKilograms ?? b.kilograms), unit: 'kg' }),
+  'body-fat': (b) => ({ value: b.percentage, unit: '%' }),
+  'active-energy-burned': (b) => ({ value: b.kcal, unit: 'kcal' }),
+  'active-minutes': (b) => ({ value: sumActiveMinutes(b.activeMinutesByActivityLevel), unit: 'min' }),
+  'active-zone-minutes': (b) => ({ value: num(b.activeZoneMinutes), unit: 'min' }),
+  'sedentary-period': (b) => ({ value: durationMinutes(b.interval), unit: 'min' }),
+  'time-in-heart-rate-zone': (b) => ({ value: durationMinutes(b.interval), unit: 'min' }),
+  'swim-lengths-data': (b) => ({ value: num(b.strokeCount), unit: 'strokes' }),
+  sleep: (b) => ({ value: num(b.summary?.minutesAsleep), unit: 'min' }),
+  exercise: (b) => ({ value: b.metricsSummary?.caloriesKcal, unit: 'kcal' }),
+}
+
+function extractValue(dataType: DataType, body: Record<string, any>) {
+  const known = VALUE_EXTRACTORS[dataType]?.(body)
+  if (known?.value != null) return known
+
+  // Generic fallback guess for types with no confirmed shape yet.
+  if (typeof body.beatsPerMinute === 'string' || typeof body.beatsPerMinute === 'number') {
+    return { value: num(body.beatsPerMinute), unit: 'bpm' }
+  }
+  if (body.count != null) return { value: num(body.count), unit: 'count' }
+  if (body.kilograms != null) return { value: num(body.kilograms), unit: 'kg' }
+  if (body.percentage != null) return { value: num(body.percentage), unit: '%' }
+  if (body.meters != null) return { value: num(body.meters), unit: 'm' }
+  return { value: undefined, unit: undefined }
+}
+
 // Best-effort extraction so every data type is chartable without a bespoke
 // mapping for each of the 38 shapes. Falls back to the raw payload only.
 function extractFields(dataType: DataType, point: Record<string, any>) {
-  const startTime: string | undefined =
-    point.interval?.startTime ??
-    point[toCamelCase(dataType)]?.sampleTime?.physicalTime ??
-    point.startTime ??
-    point.date
-
-  const endTime: string | undefined = point.interval?.endTime ?? point.endTime
-
   const body = point[toCamelCase(dataType)] ?? {}
-  let value: number | undefined
-  let unit: string | undefined
 
-  if (typeof body.beatsPerMinute === 'string' || typeof body.beatsPerMinute === 'number') {
-    value = Number(body.beatsPerMinute)
-    unit = 'bpm'
-  } else if (body.count != null) {
-    value = Number(body.count)
-    unit = 'count'
-  } else if (body.kilograms != null) {
-    value = Number(body.kilograms)
-    unit = 'kg'
-  } else if (body.percentage != null) {
-    value = Number(body.percentage)
-    unit = 'percent'
-  } else if (body.meters != null) {
-    value = Number(body.meters)
-    unit = 'm'
-  }
+  const startTimeRaw: string | Date | undefined =
+    body.interval?.startTime ??
+    body.sampleTime?.physicalTime ??
+    dateFromParts(body.date) ??
+    point.interval?.startTime ??
+    point.startTime
+
+  const endTimeRaw: string | Date | undefined = body.interval?.endTime ?? point.interval?.endTime ?? point.endTime
+
+  const { value, unit } = extractValue(dataType, body)
 
   return {
-    startTime: startTime ? new Date(startTime) : new Date(),
-    endTime: endTime ? new Date(endTime) : undefined,
+    startTime: startTimeRaw ? new Date(startTimeRaw) : new Date(),
+    endTime: endTimeRaw ? new Date(endTimeRaw) : undefined,
     value,
     unit,
     source: point.dataSource?.platform,
   }
-}
-
-function toCamelCase(kebab: string) {
-  return kebab.replace(/-([a-z])/g, (_, c) => c.toUpperCase())
 }
 
 // Syncs one data type across [since, now) in <=14-day chunks, paginating
