@@ -146,9 +146,21 @@ interface DataPointsResponse {
   nextPageToken?: string
 }
 
-// The `filter` query language's field path depends on the data type's
-// record type — Sample/Food use sample_time, Interval/Session use
-// interval.start_time, Daily uses a plain date. Only >= and < are supported.
+// The `filter` query language's field path/format is data-type-specific —
+// confirmed against the live API rather than assumed, since the docs
+// undersell how much this varies per type:
+//   - Daily: `{type}.date`, plain YYYY-MM-DD, both bounds
+//   - Interval (most Interval-record types): `{type}.interval.start_time`,
+//     physical (UTC, "Z"-suffixed) time, both bounds
+//   - Civil session (sleep/exercise/hydration-log): same field name but
+//     `civil_start_time`, a LOCAL (no "Z") timestamp — using UTC-as-naive
+//     here is an approximation, good enough for windowing
+//   - ECG: only a lower bound is accepted at all ("filtering by end time is
+//     not supported"), so it gets a single-clause filter
+//   - Sample (point-in-time measurements): `{type}.sample_time.physical_time`
+// A few types (floors, calories-in-heart-rate-zone, total-calories) don't
+// support `list` at all — Google says to use `rollup`/`dailyRollup`
+// instead — so they're expected to error here until that's implemented.
 const DAILY_TYPES = new Set([
   'daily-heart-rate-variability',
   'daily-heart-rate-zones',
@@ -159,26 +171,21 @@ const DAILY_TYPES = new Set([
   'daily-vo2-max',
 ])
 
-const INTERVAL_OR_SESSION_TYPES = new Set([
+const INTERVAL_TYPES = new Set([
   'active-energy-burned',
   'active-minutes',
   'active-zone-minutes',
   'activity-level',
   'altitude',
-  'calories-in-heart-rate-zone',
   'distance',
-  'floors',
   'sedentary-period',
   'steps',
   'swim-lengths-data',
   'time-in-heart-rate-zone',
-  'total-calories',
-  'electrocardiogram',
-  'exercise',
-  'hydration-log',
   'irregular-rhythm-notification',
-  'sleep',
 ])
+
+const CIVIL_SESSION_TYPES = new Set(['sleep', 'exercise', 'hydration-log'])
 
 function buildFilter(dataType: DataType, start: Date, end: Date) {
   const snake = dataType.replace(/-/g, '_')
@@ -189,7 +196,17 @@ function buildFilter(dataType: DataType, start: Date, end: Date) {
     return `${field} >= "${fmt(start)}" AND ${field} < "${fmt(end)}"`
   }
 
-  const field = INTERVAL_OR_SESSION_TYPES.has(dataType)
+  if (dataType === 'electrocardiogram') {
+    return `${snake}.interval.start_time >= "${start.toISOString()}"`
+  }
+
+  if (CIVIL_SESSION_TYPES.has(dataType)) {
+    const field = `${snake}.interval.civil_start_time`
+    const fmt = (d: Date) => d.toISOString().slice(0, 19)
+    return `${field} >= "${fmt(start)}" AND ${field} < "${fmt(end)}"`
+  }
+
+  const field = INTERVAL_TYPES.has(dataType)
     ? `${snake}.interval.start_time`
     : `${snake}.sample_time.physical_time`
   return `${field} >= "${start.toISOString()}" AND ${field} < "${end.toISOString()}"`
