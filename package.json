@@ -1,0 +1,33 @@
+{
+  "name": "health-tracker",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "sync": "tsx scripts/sync.ts"
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.8.0",
+    "@prisma/client": "^7.8.0",
+    "next": "14.2.35",
+    "pg": "^8.21.0",
+    "prisma": "^7.8.0",
+    "react": "^18",
+    "react-dom": "^18",
+    "recharts": "^2.15.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/pg": "^8.20.0",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "dotenv": "^17.4.2",
+    "eslint": "^8",
+    "eslint-config-next": "14.2.35",
+    "tsx": "^4.19.0",
+    "typescript": "^5"
+  }
+}

@@ -1,0 +1,45 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Single-user app: one row holds the current Google OAuth tokens.
+model GoogleAccount {
+  id           String   @id @default(cuid())
+  accessToken  String
+  refreshToken String
+  expiresAt    DateTime
+  scope        String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// Generic store for every Google Health API data type (heart-rate, steps,
+// sleep, weight, etc). Raw payload is always kept so nothing is lost even
+// for shapes we don't explicitly model; value/unit are best-effort
+// extractions used for quick charting.
+model DataPoint {
+  id         String   @id @default(cuid())
+  dataType   String
+  startTime  DateTime
+  endTime    DateTime?
+  value      Float?
+  unit       String?
+  source     String?
+  raw        Json
+  createdAt  DateTime @default(now())
+
+  @@unique([dataType, startTime, source])
+  @@index([dataType, startTime])
+}
+
+// Tracks how far back we've synced per data type, since each type has its
+// own max query window (e.g. 14 days for heart-rate).
+model SyncState {
+  dataType     String    @id
+  lastSyncedAt DateTime?
+  updatedAt    DateTime  @updatedAt
+}
