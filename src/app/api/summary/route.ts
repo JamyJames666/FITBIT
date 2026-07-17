@@ -3,7 +3,17 @@ import { prisma } from '@/lib/prisma'
 
 export const dynamic = 'force-dynamic'
 
-const SINCE_HOURS = 24
+// "Today" means the local calendar day, not a rolling 24h window — a
+// rolling window double-counts across midnight and doesn't match what the
+// Fitbit/Google Health app shows. Default +60min matches the utcOffset
+// seen in this account's synced data; override via env if that changes.
+const TZ_OFFSET_MINUTES = Number(process.env.TZ_OFFSET_MINUTES ?? '60')
+
+function startOfLocalDay(offsetMinutes: number) {
+  const localNow = new Date(Date.now() + offsetMinutes * 60_000)
+  const localMidnightUtc = Date.UTC(localNow.getUTCFullYear(), localNow.getUTCMonth(), localNow.getUTCDate())
+  return new Date(localMidnightUtc - offsetMinutes * 60_000)
+}
 
 interface Metric {
   key: string
@@ -27,7 +37,7 @@ const METRICS: Metric[] = [
 ]
 
 export async function GET() {
-  const since = new Date(Date.now() - SINCE_HOURS * 3_600_000)
+  const since = startOfLocalDay(TZ_OFFSET_MINUTES)
 
   const entries = await Promise.all(
     METRICS.map(async (m) => {

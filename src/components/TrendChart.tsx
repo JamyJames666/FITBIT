@@ -13,16 +13,31 @@ import {
   YAxis,
 } from 'recharts'
 
+export interface RangeConfig {
+  hours?: number
+  since?: string
+  until?: string
+  bucket: 'none' | 'hour' | 'day'
+}
+
 interface Point {
   startTime: string
   value: number | null
 }
 
-function formatTime(iso: string) {
-  return new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+function formatTick(iso: string, bucket: RangeConfig['bucket']) {
+  const d = new Date(iso)
+  if (bucket === 'day') return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
+  if (bucket === 'hour') return d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric' })
+  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 }
 
-function makeTooltip(unit: string) {
+function formatAxisNumber(v: number) {
+  if (Math.abs(v) >= 1000) return Intl.NumberFormat(undefined, { notation: 'compact' }).format(v)
+  return Number.isInteger(v) ? String(v) : v.toFixed(1)
+}
+
+function makeTooltip(unit: string, bucket: RangeConfig['bucket']) {
   return function CustomTooltip({ active, payload }: any) {
     if (!active || !payload?.length) return null
     const point: Point = payload[0].payload
@@ -31,7 +46,7 @@ function makeTooltip(unit: string) {
         <div className="viz-tooltip-value">
           {point.value != null ? `${point.value.toLocaleString(undefined, { maximumFractionDigits: 1 })} ${unit}` : '—'}
         </div>
-        <div className="viz-tooltip-time">{formatTime(point.startTime)}</div>
+        <div className="viz-tooltip-time">{formatTick(point.startTime, bucket)}</div>
       </div>
     )
   }
@@ -49,14 +64,14 @@ export default function TrendChart({
   dataType,
   title,
   unit,
-  hours = 24,
+  range,
   chartType = 'line',
   seriesSlot = 1,
 }: {
   dataType: string
   title: string
   unit: string
-  hours?: number
+  range: RangeConfig
   chartType?: 'line' | 'bar'
   seriesSlot?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8
 }) {
@@ -65,7 +80,13 @@ export default function TrendChart({
 
   useEffect(() => {
     let cancelled = false
-    fetch(`/api/data-points?dataType=${dataType}&hours=${hours}&limit=2000`)
+    setPoints(null)
+    const params = new URLSearchParams({ dataType, bucket: range.bucket, limit: '3000' })
+    if (range.since) params.set('since', range.since)
+    if (range.until) params.set('until', range.until)
+    if (range.hours != null) params.set('hours', String(range.hours))
+
+    fetch(`/api/data-points?${params.toString()}`)
       .then((r) => r.json())
       .then((d) => {
         if (cancelled) return
@@ -77,25 +98,26 @@ export default function TrendChart({
     return () => {
       cancelled = true
     }
-  }, [dataType, hours])
+  }, [dataType, range.hours, range.since, range.until, range.bucket])
 
   const hasData = points && points.some((p) => p.value != null)
+  const tickFmt = (iso: string) => formatTick(iso, range.bucket)
 
   return (
-    <div className="viz-root card">
+    <div className="viz-root card chart-card">
       <h3 className="card-title">{title}</h3>
       {!points ? (
         <div className="card-empty">Loading…</div>
       ) : !hasData ? (
         <div className="card-empty">No data synced yet.</div>
       ) : (
-        <ResponsiveContainer width="100%" height={200}>
+        <ResponsiveContainer width="100%" height={280}>
           {chartType === 'bar' ? (
-            <BarChart data={points} margin={{ top: 8, right: 12, bottom: 0, left: -16 }}>
+            <BarChart data={points} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
               <CartesianGrid vertical={false} stroke="var(--gridline)" strokeWidth={1} />
               <XAxis
                 dataKey="startTime"
-                tickFormatter={formatTime}
+                tickFormatter={tickFmt}
                 stroke="var(--muted)"
                 tick={{ fill: 'var(--muted)', fontSize: 12 }}
                 axisLine={{ stroke: 'var(--baseline)' }}
@@ -107,17 +129,18 @@ export default function TrendChart({
                 tick={{ fill: 'var(--muted)', fontSize: 12 }}
                 axisLine={false}
                 tickLine={false}
-                width={36}
+                width={52}
+                tickFormatter={formatAxisNumber}
               />
-              <Tooltip content={makeTooltip(unit)} cursor={{ fill: 'var(--gridline)' }} />
-              <Bar dataKey="value" fill={color} radius={[4, 4, 0, 0]} maxBarSize={24} isAnimationActive={false} />
+              <Tooltip content={makeTooltip(unit, range.bucket)} cursor={{ fill: 'var(--gridline)' }} />
+              <Bar dataKey="value" fill={color} radius={[4, 4, 0, 0]} maxBarSize={28} isAnimationActive={false} />
             </BarChart>
           ) : (
-            <LineChart data={points} margin={{ top: 8, right: 12, bottom: 0, left: -16 }}>
+            <LineChart data={points} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
               <CartesianGrid vertical={false} stroke="var(--gridline)" strokeWidth={1} />
               <XAxis
                 dataKey="startTime"
-                tickFormatter={formatTime}
+                tickFormatter={tickFmt}
                 stroke="var(--muted)"
                 tick={{ fill: 'var(--muted)', fontSize: 12 }}
                 axisLine={{ stroke: 'var(--baseline)' }}
@@ -129,10 +152,11 @@ export default function TrendChart({
                 tick={{ fill: 'var(--muted)', fontSize: 12 }}
                 axisLine={false}
                 tickLine={false}
-                width={36}
+                width={52}
                 domain={['auto', 'auto']}
+                tickFormatter={formatAxisNumber}
               />
-              <Tooltip content={makeTooltip(unit)} cursor={{ stroke: 'var(--baseline)', strokeWidth: 1 }} />
+              <Tooltip content={makeTooltip(unit, range.bucket)} cursor={{ stroke: 'var(--baseline)', strokeWidth: 1 }} />
               <Line
                 type="monotone"
                 dataKey="value"

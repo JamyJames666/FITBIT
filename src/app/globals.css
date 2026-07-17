@@ -72,9 +72,9 @@ body {
 }
 
 .page {
-  max-width: 1100px;
+  max-width: 1400px;
   margin: 0 auto;
-  padding: 32px 16px;
+  padding: 32px 24px;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -84,7 +84,11 @@ body {
   background: var(--surface-1);
   border: 1px solid var(--border);
   border-radius: 12px;
-  padding: 16px;
+  padding: 20px;
+}
+
+.chart-card {
+  padding: 20px 20px 12px;
 }
 
 .card-title {
@@ -194,8 +198,47 @@ body {
 
 .chart-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(480px, 1fr));
+  gap: 20px;
+}
+
+.range-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.range-btn {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.range-btn.active {
+  background: var(--series-1);
+  border-color: var(--series-1);
+  color: white;
+}
+
+.range-custom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.range-custom input[type='date'] {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  border-radius: 8px;
+  padding: 5px 8px;
+  font-size: 13px;
 }
 
 .explorer-controls {
