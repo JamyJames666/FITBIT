@@ -1,12 +1,12 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 
 export const dynamic = 'force-dynamic'
 
-// "Today" means the local calendar day, not a rolling 24h window — a
-// rolling window double-counts across midnight and doesn't match what the
-// Fitbit/Google Health app shows. Default +60min matches the utcOffset
-// seen in this account's synced data; override via env if that changes.
+// Default "today" means the local calendar day, not a rolling 24h window —
+// a rolling window double-counts across midnight. Default +60min matches
+// the utcOffset seen in this account's synced data; override via env if
+// that changes. Only used when the caller doesn't pass since/until.
 const TZ_OFFSET_MINUTES = Number(process.env.TZ_OFFSET_MINUTES ?? '60')
 
 function startOfLocalDay(offsetMinutes: number) {
@@ -24,26 +24,29 @@ interface Metric {
 }
 
 const METRICS: Metric[] = [
-  { key: 'steps', dataType: 'steps', label: 'Steps today', mode: 'sum', unit: 'steps' },
-  { key: 'distance', dataType: 'distance', label: 'Distance today', mode: 'sum', unit: 'km' },
+  { key: 'steps', dataType: 'steps', label: 'Steps', mode: 'sum', unit: 'steps' },
+  { key: 'distance', dataType: 'distance', label: 'Distance', mode: 'sum', unit: 'km' },
   { key: 'calories', dataType: 'active-energy-burned', label: 'Calories burned', mode: 'sum', unit: 'kcal' },
   { key: 'activeMinutes', dataType: 'active-minutes', label: 'Active minutes', mode: 'sum', unit: 'min' },
-  { key: 'heartRate', dataType: 'heart-rate', label: 'Latest heart rate', mode: 'latest', unit: 'bpm' },
+  { key: 'heartRate', dataType: 'heart-rate', label: 'Heart rate', mode: 'latest', unit: 'bpm' },
   { key: 'restingHeartRate', dataType: 'daily-resting-heart-rate', label: 'Resting heart rate', mode: 'latest', unit: 'bpm' },
   { key: 'hrv', dataType: 'heart-rate-variability', label: 'Heart rate variability', mode: 'latest', unit: 'ms' },
   { key: 'spo2', dataType: 'oxygen-saturation', label: 'Blood oxygen (SpO2)', mode: 'latest', unit: '%' },
-  { key: 'sleep', dataType: 'sleep', label: 'Last sleep', mode: 'latest', unit: 'min' },
+  { key: 'sleep', dataType: 'sleep', label: 'Sleep', mode: 'latest', unit: 'min' },
   { key: 'weight', dataType: 'weight', label: 'Weight', mode: 'latest', unit: 'kg' },
 ]
 
-export async function GET() {
-  const since = startOfLocalDay(TZ_OFFSET_MINUTES)
+export async function GET(req: NextRequest) {
+  const sinceParam = req.nextUrl.searchParams.get('since')
+  const untilParam = req.nextUrl.searchParams.get('until')
+  const until = untilParam ? new Date(untilParam) : new Date()
+  const since = sinceParam ? new Date(sinceParam) : startOfLocalDay(TZ_OFFSET_MINUTES)
 
   const entries = await Promise.all(
     METRICS.map(async (m) => {
       if (m.mode === 'sum') {
         const agg = await prisma.dataPoint.aggregate({
-          where: { dataType: m.dataType, startTime: { gte: since } },
+          where: { dataType: m.dataType, startTime: { gte: since, lt: until } },
           _sum: { value: true },
         })
         let value = agg._sum.value
@@ -51,8 +54,10 @@ export async function GET() {
         return [m.key, { label: m.label, value, unit: m.unit, at: null as string | null }]
       }
 
+      // "Latest within the selected period" — a custom past range should
+      // reflect that period's most recent reading, not today's.
       const point = await prisma.dataPoint.findFirst({
-        where: { dataType: m.dataType },
+        where: { dataType: m.dataType, startTime: { gte: since, lt: until } },
         orderBy: { startTime: 'desc' },
         select: { value: true, startTime: true },
       })

@@ -9,12 +9,13 @@ interface Metric {
   unit: string
 }
 
-export default function SummaryStats() {
+export default function SummaryStats({ since, until }: { since: string; until: string }) {
   const [metrics, setMetrics] = useState<Record<string, Metric> | null>(null)
 
   useEffect(() => {
     let cancelled = false
-    fetch('/api/summary')
+    setMetrics(null)
+    fetch(`/api/summary?since=${encodeURIComponent(since)}&until=${encodeURIComponent(until)}`)
       .then((r) => r.json())
       .then((d) => {
         if (!cancelled) setMetrics(d.metrics)
@@ -22,7 +23,7 @@ export default function SummaryStats() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [since, until])
 
   if (!metrics) return <div className="card-empty">Loading…</div>
 

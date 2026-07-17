@@ -241,6 +241,11 @@ body {
   font-size: 13px;
 }
 
+.range-hint {
+  margin-left: auto;
+  font-size: 12px;
+}
+
 .explorer-controls {
   display: flex;
   gap: 8px;
