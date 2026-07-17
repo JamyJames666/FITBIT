@@ -2,7 +2,7 @@ import { prisma } from './prisma'
 
 const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
 const TOKEN_URL = 'https://oauth2.googleapis.com/token'
-const API_BASE = 'https://www.googleapis.com/health/v4'
+const API_BASE = 'https://health.googleapis.com/v4'
 
 const SCOPE_CATEGORIES = [
   'activity_and_fitness',
