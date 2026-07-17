@@ -201,7 +201,10 @@ function buildFilter(dataType: DataType, start: Date, end: Date) {
   }
 
   if (CIVIL_SESSION_TYPES.has(dataType)) {
-    const field = `${snake}.interval.civil_start_time`
+    // sleep filters by when the session ENDS (the morning it's attributed
+    // to), not when it starts — confirmed against the live API.
+    const member = dataType === 'sleep' ? 'civil_end_time' : 'civil_start_time'
+    const field = `${snake}.interval.${member}`
     const fmt = (d: Date) => d.toISOString().slice(0, 19)
     return `${field} >= "${fmt(start)}" AND ${field} < "${fmt(end)}"`
   }
