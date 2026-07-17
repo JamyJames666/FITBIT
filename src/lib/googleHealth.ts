@@ -146,6 +146,55 @@ interface DataPointsResponse {
   nextPageToken?: string
 }
 
+// The `filter` query language's field path depends on the data type's
+// record type — Sample/Food use sample_time, Interval/Session use
+// interval.start_time, Daily uses a plain date. Only >= and < are supported.
+const DAILY_TYPES = new Set([
+  'daily-heart-rate-variability',
+  'daily-heart-rate-zones',
+  'daily-oxygen-saturation',
+  'daily-respiratory-rate',
+  'daily-resting-heart-rate',
+  'daily-sleep-temperature-derivations',
+  'daily-vo2-max',
+])
+
+const INTERVAL_OR_SESSION_TYPES = new Set([
+  'active-energy-burned',
+  'active-minutes',
+  'active-zone-minutes',
+  'activity-level',
+  'altitude',
+  'calories-in-heart-rate-zone',
+  'distance',
+  'floors',
+  'sedentary-period',
+  'steps',
+  'swim-lengths-data',
+  'time-in-heart-rate-zone',
+  'total-calories',
+  'electrocardiogram',
+  'exercise',
+  'hydration-log',
+  'irregular-rhythm-notification',
+  'sleep',
+])
+
+function buildFilter(dataType: DataType, start: Date, end: Date) {
+  const snake = dataType.replace(/-/g, '_')
+
+  if (DAILY_TYPES.has(dataType)) {
+    const field = `${snake}.date`
+    const fmt = (d: Date) => d.toISOString().slice(0, 10)
+    return `${field} >= "${fmt(start)}" AND ${field} < "${fmt(end)}"`
+  }
+
+  const field = INTERVAL_OR_SESSION_TYPES.has(dataType)
+    ? `${snake}.interval.start_time`
+    : `${snake}.sample_time.physical_time`
+  return `${field} >= "${start.toISOString()}" AND ${field} < "${end.toISOString()}"`
+}
+
 async function fetchDataPointsPage(
   accessToken: string,
   dataType: DataType,
@@ -154,8 +203,7 @@ async function fetchDataPointsPage(
   pageToken?: string
 ): Promise<DataPointsResponse> {
   const params = new URLSearchParams({
-    startTime: startTime.toISOString(),
-    endTime: endTime.toISOString(),
+    filter: buildFilter(dataType, startTime, endTime),
     pageSize: '1000',
   })
   if (pageToken) params.set('pageToken', pageToken)
