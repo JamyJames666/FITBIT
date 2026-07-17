@@ -1,19 +1,13 @@
 import { prisma } from '@/lib/prisma'
-import HeartRateChart from '@/components/HeartRateChart'
 import SyncButton from '@/components/SyncButton'
+import SummaryStats from '@/components/SummaryStats'
+import TrendChart from '@/components/TrendChart'
+import DataExplorer from '@/components/DataExplorer'
 
 export const dynamic = 'force-dynamic'
 
 export default async function DashboardPage() {
   const account = await prisma.googleAccount.findFirst({ orderBy: { createdAt: 'desc' } })
-
-  const counts = account
-    ? await prisma.dataPoint.groupBy({
-        by: ['dataType'],
-        _count: { _all: true },
-        orderBy: { dataType: 'asc' },
-      })
-    : []
 
   return (
     <main className="page">
@@ -31,31 +25,59 @@ export default async function DashboardPage() {
 
       {account && (
         <>
-          <HeartRateChart hours={24} />
+          <h2 className="section-title">Today</h2>
+          <SummaryStats />
 
-          <div className="card">
-            <h3 className="card-title">Synced data points</h3>
-            {counts.length === 0 ? (
-              <p className="card-empty">No data synced yet — click &quot;Sync now&quot; above.</p>
-            ) : (
-              <ul style={{ listStyle: 'none', margin: 0, padding: 0, fontSize: 13 }}>
-                {counts.map((c) => (
-                  <li
-                    key={c.dataType}
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      padding: '4px 0',
-                      color: 'var(--text-secondary)',
-                    }}
-                  >
-                    <span>{c.dataType}</span>
-                    <span>{c._count._all}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
+          <h2 className="section-title">Trends</h2>
+          <div className="chart-grid">
+            <TrendChart dataType="heart-rate" title="Heart rate" unit="bpm" hours={24} chartType="line" seriesSlot={1} />
+            <TrendChart dataType="steps" title="Steps" unit="steps" hours={24} chartType="bar" seriesSlot={2} />
+            <TrendChart dataType="distance" title="Distance" unit="m" hours={24} chartType="bar" seriesSlot={3} />
+            <TrendChart
+              dataType="active-energy-burned"
+              title="Calories burned"
+              unit="kcal"
+              hours={24}
+              chartType="bar"
+              seriesSlot={4}
+            />
+            <TrendChart
+              dataType="active-minutes"
+              title="Active minutes"
+              unit="min"
+              hours={72}
+              chartType="bar"
+              seriesSlot={5}
+            />
+            <TrendChart
+              dataType="heart-rate-variability"
+              title="Heart rate variability"
+              unit="ms"
+              hours={168}
+              chartType="line"
+              seriesSlot={6}
+            />
+            <TrendChart
+              dataType="oxygen-saturation"
+              title="Blood oxygen (SpO2)"
+              unit="%"
+              hours={72}
+              chartType="line"
+              seriesSlot={7}
+            />
+            <TrendChart
+              dataType="daily-resting-heart-rate"
+              title="Resting heart rate"
+              unit="bpm"
+              hours={720}
+              chartType="line"
+              seriesSlot={8}
+            />
+            <TrendChart dataType="sleep" title="Sleep (minutes asleep)" unit="min" hours={336} chartType="bar" seriesSlot={1} />
           </div>
+
+          <h2 className="section-title">Explore raw data</h2>
+          <DataExplorer />
         </>
       )}
     </main>

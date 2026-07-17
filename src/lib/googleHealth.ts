@@ -1,4 +1,8 @@
 import { prisma } from './prisma'
+import { DATA_TYPES, DataType } from './dataTypes'
+
+export { DATA_TYPES }
+export type { DataType }
 
 const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
 const TOKEN_URL = 'https://oauth2.googleapis.com/token'
@@ -16,54 +20,6 @@ const SCOPE_CATEGORIES = [
 export const SCOPES = SCOPE_CATEGORIES.map(
   (c) => `https://www.googleapis.com/auth/googlehealth.${c}.readonly`
 )
-
-// Every Google Health API data type we pull. maxQueryDays caps how wide a
-// single startTime/endTime window can be per request (Google enforces this
-// server-side; heart-rate is documented at 14 days, everything else uses
-// the same conservative default until proven otherwise).
-export const DATA_TYPES = [
-  'active-energy-burned',
-  'active-minutes',
-  'active-zone-minutes',
-  'activity-level',
-  'altitude',
-  'blood-glucose',
-  'body-fat',
-  'calories-in-heart-rate-zone',
-  'core-body-temperature',
-  'daily-heart-rate-variability',
-  'daily-heart-rate-zones',
-  'daily-oxygen-saturation',
-  'daily-respiratory-rate',
-  'daily-resting-heart-rate',
-  'daily-sleep-temperature-derivations',
-  'daily-vo2-max',
-  'distance',
-  'electrocardiogram',
-  'exercise',
-  'floors',
-  'food',
-  'food-measurement-unit',
-  'heart-rate',
-  'heart-rate-variability',
-  'height',
-  'hydration-log',
-  'irregular-rhythm-notification',
-  'nutrition-log',
-  'oxygen-saturation',
-  'respiratory-rate-sleep-summary',
-  'run-vo2-max',
-  'sedentary-period',
-  'sleep',
-  'steps',
-  'swim-lengths-data',
-  'time-in-heart-rate-zone',
-  'total-calories',
-  'vo2-max',
-  'weight',
-] as const
-
-export type DataType = (typeof DATA_TYPES)[number]
 
 const MAX_QUERY_DAYS = 14
 
