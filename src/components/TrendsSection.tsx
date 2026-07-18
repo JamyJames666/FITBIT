@@ -104,7 +104,7 @@ export default function TrendsSection() {
             <input type="date" value={customUntil} onChange={(e) => setCustomUntil(e.target.value)} />
           </span>
         )}
-        <span className="muted range-hint">Drag the strip under any chart to zoom into a shorter range.</span>
+        <span className="muted range-hint">Click and drag on any chart to zoom in.</span>
       </div>
 
       <div className="chart-grid">

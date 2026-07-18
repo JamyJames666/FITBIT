@@ -4,10 +4,10 @@ import { useEffect, useState } from 'react'
 import {
   Bar,
   BarChart,
-  Brush,
   CartesianGrid,
   Line,
   LineChart,
+  ReferenceArea,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -83,6 +83,8 @@ export default function TrendChart({
   onZoom?: (sinceISO: string, untilISO: string) => void
 }) {
   const [points, setPoints] = useState<Point[] | null>(null)
+  const [dragStart, setDragStart] = useState<string | null>(null)
+  const [dragEnd, setDragEnd] = useState<string | null>(null)
   const color = `var(--series-${seriesSlot})`
 
   useEffect(() => {
@@ -114,13 +116,26 @@ export default function TrendChart({
   const hasData = points && points.some((p) => p.value != null)
   const tickFmt = (iso: string) => formatTick(iso, range)
 
-  function handleBrush(e: any) {
-    if (!onZoom || !points || e?.startIndex == null || e?.endIndex == null) return
-    if (e.startIndex === 0 && e.endIndex === points.length - 1) return // no-op, full range
-    const start = points[e.startIndex]?.startTime
-    const end = points[e.endIndex]?.startTime
-    if (start && end) onZoom(start, end)
+  function commitZoom() {
+    if (dragStart && dragEnd && dragStart !== dragEnd && onZoom) {
+      const [lo, hi] = [dragStart, dragEnd].sort()
+      onZoom(lo, hi)
+    }
+    setDragStart(null)
+    setDragEnd(null)
   }
+
+  const dragHandlers = onZoom
+    ? {
+        onMouseDown: (e: any) => e?.activeLabel && setDragStart(e.activeLabel),
+        onMouseMove: (e: any) => dragStart && e?.activeLabel && setDragEnd(e.activeLabel),
+        onMouseUp: commitZoom,
+        onMouseLeave: () => {
+          setDragStart(null)
+          setDragEnd(null)
+        },
+      }
+    : {}
 
   return (
     <div className="viz-root card chart-card">
@@ -130,9 +145,14 @@ export default function TrendChart({
       ) : !hasData ? (
         <div className="card-empty">No data synced yet.</div>
       ) : (
-        <ResponsiveContainer width="100%" height={300}>
+        <ResponsiveContainer width="100%" height={280}>
           {chartType === 'bar' ? (
-            <BarChart data={points} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
+            <BarChart
+              data={points}
+              margin={{ top: 8, right: 12, bottom: 0, left: 0 }}
+              style={{ cursor: onZoom ? 'crosshair' : undefined, userSelect: 'none' }}
+              {...dragHandlers}
+            >
               <CartesianGrid vertical={false} stroke="var(--gridline)" strokeWidth={1} />
               <XAxis
                 dataKey="startTime"
@@ -153,20 +173,17 @@ export default function TrendChart({
               />
               <Tooltip content={makeTooltip(unit, range)} cursor={{ fill: 'var(--gridline)' }} />
               <Bar dataKey="value" fill={color} radius={[4, 4, 0, 0]} maxBarSize={28} isAnimationActive={false} />
-              {onZoom && points.length > 4 && (
-                <Brush
-                  dataKey="startTime"
-                  height={22}
-                  travellerWidth={8}
-                  stroke="var(--baseline)"
-                  fill="var(--surface-1)"
-                  tickFormatter={tickFmt}
-                  onChange={handleBrush}
-                />
+              {dragStart && dragEnd && (
+                <ReferenceArea x1={dragStart} x2={dragEnd} fill={color} fillOpacity={0.15} stroke={color} strokeOpacity={0.4} />
               )}
             </BarChart>
           ) : (
-            <LineChart data={points} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
+            <LineChart
+              data={points}
+              margin={{ top: 8, right: 12, bottom: 0, left: 0 }}
+              style={{ cursor: onZoom ? 'crosshair' : undefined, userSelect: 'none' }}
+              {...dragHandlers}
+            >
               <CartesianGrid vertical={false} stroke="var(--gridline)" strokeWidth={1} />
               <XAxis
                 dataKey="startTime"
@@ -198,16 +215,8 @@ export default function TrendChart({
                 isAnimationActive={false}
                 connectNulls
               />
-              {onZoom && points.length > 4 && (
-                <Brush
-                  dataKey="startTime"
-                  height={22}
-                  travellerWidth={8}
-                  stroke="var(--baseline)"
-                  fill="var(--surface-1)"
-                  tickFormatter={tickFmt}
-                  onChange={handleBrush}
-                />
+              {dragStart && dragEnd && (
+                <ReferenceArea x1={dragStart} x2={dragEnd} fill={color} fillOpacity={0.15} stroke={color} strokeOpacity={0.4} />
               )}
             </LineChart>
           )}
