@@ -7,12 +7,17 @@ import { RAW_ALWAYS_TYPES, SUM_TYPES } from '@/lib/metricMeta'
 
 type Timeframe = 'day' | 'week' | 'month' | 'custom'
 
+const SPO2_ARTIFACT_BELOW = 70
+const minutesToHours = (v: number) => v / 60
+
 const CHARTS: Array<{
   dataType: string
   title: string
   unit: string
   chartType: 'line' | 'bar'
   seriesSlot: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8
+  transform?: (v: number) => number
+  artifactBelow?: number
 }> = [
   { dataType: 'heart-rate', title: 'Heart rate', unit: 'bpm', chartType: 'line', seriesSlot: 1 },
   { dataType: 'steps', title: 'Steps', unit: 'steps', chartType: 'bar', seriesSlot: 2 },
@@ -20,9 +25,16 @@ const CHARTS: Array<{
   { dataType: 'active-energy-burned', title: 'Calories burned', unit: 'kcal', chartType: 'bar', seriesSlot: 4 },
   { dataType: 'active-minutes', title: 'Active minutes', unit: 'min', chartType: 'bar', seriesSlot: 5 },
   { dataType: 'heart-rate-variability', title: 'Heart rate variability', unit: 'ms', chartType: 'line', seriesSlot: 6 },
-  { dataType: 'oxygen-saturation', title: 'Blood oxygen (SpO2)', unit: '%', chartType: 'line', seriesSlot: 7 },
+  {
+    dataType: 'oxygen-saturation',
+    title: 'Blood oxygen (SpO2)',
+    unit: '%',
+    chartType: 'line',
+    seriesSlot: 7,
+    artifactBelow: SPO2_ARTIFACT_BELOW,
+  },
   { dataType: 'daily-resting-heart-rate', title: 'Resting heart rate', unit: 'bpm', chartType: 'line', seriesSlot: 8 },
-  { dataType: 'sleep', title: 'Sleep (minutes asleep)', unit: 'min', chartType: 'bar', seriesSlot: 1 },
+  { dataType: 'sleep', title: 'Sleep', unit: 'hrs', chartType: 'bar', seriesSlot: 1, transform: minutesToHours },
 ]
 
 const TIMEFRAME_LABEL: Record<Timeframe, string> = {
@@ -45,22 +57,25 @@ function todayInputValue(daysAgo = 0) {
 
 export default function TrendsSection() {
   const [timeframe, setTimeframe] = useState<Timeframe>('day')
-  const [customSince, setCustomSince] = useState(todayInputValue(7))
-  const [customUntil, setCustomUntil] = useState(todayInputValue(0))
+  // Full ISO timestamps, not just dates — a scroll/drag zoom needs
+  // sub-day precision, only the manual date-picker inputs below round to
+  // whole days.
+  const [customSince, setCustomSince] = useState(todayInputValue(7) + 'T00:00:00.000Z')
+  const [customUntil, setCustomUntil] = useState(todayInputValue(0) + 'T23:59:59.999Z')
 
-  const since =
-    timeframe === 'custom'
-      ? new Date(customSince + 'T00:00:00.000Z').toISOString()
-      : new Date(Date.now() - hoursFor(timeframe) * 3_600_000).toISOString()
-  const until =
-    timeframe === 'custom' ? new Date(customUntil + 'T23:59:59.999Z').toISOString() : new Date().toISOString()
+  const since = timeframe === 'custom' ? customSince : new Date(Date.now() - hoursFor(timeframe) * 3_600_000).toISOString()
+  const until = timeframe === 'custom' ? customUntil : new Date().toISOString()
   const spanDays = (new Date(until).getTime() - new Date(since).getTime()) / 86_400_000
 
   function chartRange(dataType: string): RangeConfig {
     if (RAW_ALWAYS_TYPES.has(dataType)) return { since, until, bucket: 'none', spanDays }
     const isSum = SUM_TYPES.has(dataType)
     let bucket: RangeConfig['bucket']
-    if (spanDays <= 1) bucket = isSum ? 'hour' : 'none'
+    // Progressively finer as the window narrows — zoomed in far enough,
+    // every chart (including cumulative-count ones like steps) shows raw
+    // unbucketed points rather than an hourly rollup.
+    if (spanDays <= 0.25) bucket = 'none'
+    else if (spanDays <= 2) bucket = isSum ? 'hour' : 'none'
     else if (spanDays <= 10) bucket = isSum ? 'day' : 'hour'
     else bucket = 'day'
     return { since, until, bucket, spanDays }
@@ -68,8 +83,13 @@ export default function TrendsSection() {
 
   function handleZoom(sinceISO: string, untilISO: string) {
     setTimeframe('custom')
-    setCustomSince(sinceISO.slice(0, 10))
-    setCustomUntil(untilISO.slice(0, 10))
+    setCustomSince(sinceISO)
+    setCustomUntil(untilISO)
+  }
+
+  function setCustomDate(which: 'since' | 'until', dateValue: string) {
+    if (which === 'since') setCustomSince(dateValue + 'T00:00:00.000Z')
+    else setCustomUntil(dateValue + 'T23:59:59.999Z')
   }
 
   return (
@@ -99,12 +119,12 @@ export default function TrendsSection() {
         </button>
         {timeframe === 'custom' && (
           <span className="range-custom">
-            <input type="date" value={customSince} onChange={(e) => setCustomSince(e.target.value)} />
+            <input type="date" value={customSince.slice(0, 10)} onChange={(e) => setCustomDate('since', e.target.value)} />
             <span className="muted">to</span>
-            <input type="date" value={customUntil} onChange={(e) => setCustomUntil(e.target.value)} />
+            <input type="date" value={customUntil.slice(0, 10)} onChange={(e) => setCustomDate('until', e.target.value)} />
           </span>
         )}
-        <span className="muted range-hint">Click and drag on any chart to zoom in.</span>
+        <span className="muted range-hint">Drag to zoom, or scroll on a chart to zoom in/out around the cursor.</span>
       </div>
 
       <div className="chart-grid">
@@ -118,6 +138,8 @@ export default function TrendsSection() {
             seriesSlot={c.seriesSlot}
             range={chartRange(c.dataType)}
             onZoom={handleZoom}
+            transform={c.transform}
+            artifactBelow={c.artifactBelow}
           />
         ))}
       </div>

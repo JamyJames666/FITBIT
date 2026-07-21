@@ -8,6 +8,8 @@ services:
       NEXT_PUBLIC_BASE_URL: https://health.hamidullah.net
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      APP_PASSWORD: ${APP_PASSWORD}
+      SESSION_SECRET: ${SESSION_SECRET}
     depends_on:
       db:
         condition: service_healthy

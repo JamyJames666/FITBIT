@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { resolvePreferredSource } from '@/lib/sourcePreference'
 
 export const dynamic = 'force-dynamic'
 
@@ -44,9 +45,11 @@ export async function GET(req: NextRequest) {
 
   const entries = await Promise.all(
     METRICS.map(async (m) => {
+      const source = await resolvePreferredSource(m.dataType, since, until)
+
       if (m.mode === 'sum') {
         const agg = await prisma.dataPoint.aggregate({
-          where: { dataType: m.dataType, startTime: { gte: since, lt: until } },
+          where: { dataType: m.dataType, startTime: { gte: since, lt: until }, ...(source ? { source } : {}) },
           _sum: { value: true },
         })
         let value = agg._sum.value
@@ -57,7 +60,7 @@ export async function GET(req: NextRequest) {
       // "Latest within the selected period" — a custom past range should
       // reflect that period's most recent reading, not today's.
       const point = await prisma.dataPoint.findFirst({
-        where: { dataType: m.dataType, startTime: { gte: since, lt: until } },
+        where: { dataType: m.dataType, startTime: { gte: since, lt: until }, ...(source ? { source } : {}) },
         orderBy: { startTime: 'desc' },
         select: { value: true, startTime: true },
       })

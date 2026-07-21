@@ -1,25 +1,27 @@
 'use client'
 
-import { useState } from 'react'
+import { useSync } from './DashboardClient'
+
+function timeAgo(date: Date) {
+  const secs = Math.max(0, Math.round((Date.now() - date.getTime()) / 1000))
+  if (secs < 60) return `${secs}s ago`
+  const mins = Math.round(secs / 60)
+  return `${mins}m ago`
+}
 
 export default function SyncButton() {
-  const [status, setStatus] = useState<'idle' | 'syncing' | 'done' | 'error'>('idle')
-
-  async function runSync() {
-    setStatus('syncing')
-    try {
-      const res = await fetch('/api/sync', { method: 'POST' })
-      if (!res.ok) throw new Error(await res.text())
-      setStatus('done')
-      window.location.reload()
-    } catch {
-      setStatus('error')
-    }
-  }
+  const { status, lastSyncedAt, runSync } = useSync()
 
   return (
-    <button className="btn" onClick={runSync} disabled={status === 'syncing'}>
-      {status === 'syncing' ? 'Syncing…' : status === 'error' ? 'Sync failed — retry' : 'Sync now'}
-    </button>
+    <div className="sync-row">
+      {lastSyncedAt && status !== 'syncing' && (
+        <span className="muted sync-hint">
+          {status === 'error' ? 'Last sync failed — retrying every 60s' : `Synced ${timeAgo(lastSyncedAt)}`}
+        </span>
+      )}
+      <button className="btn" onClick={runSync} disabled={status === 'syncing'}>
+        {status === 'syncing' ? 'Syncing…' : status === 'error' ? 'Sync failed — retry now' : 'Sync now'}
+      </button>
+    </div>
   )
 }

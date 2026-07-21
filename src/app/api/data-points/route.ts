@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { aggMode, RAW_ALWAYS_TYPES } from '@/lib/metricMeta'
+import { resolvePreferredSource } from '@/lib/sourcePreference'
 
 export const dynamic = 'force-dynamic'
 
@@ -26,6 +27,7 @@ export async function GET(req: NextRequest) {
   const page = Number(req.nextUrl.searchParams.get('page') ?? '0')
   const bucketParam = req.nextUrl.searchParams.get('bucket')
   const bucket = bucketParam === 'hour' || bucketParam === 'day' ? bucketParam : 'none'
+  const dedupe = req.nextUrl.searchParams.get('dedupe') === '1'
 
   const until = untilParam ? new Date(untilParam) : new Date()
   const since = sinceParam
@@ -34,17 +36,30 @@ export async function GET(req: NextRequest) {
       ? new Date(until.getTime() - Number(hoursParam) * 3_600_000)
       : null
 
+  const source = dedupe ? await resolvePreferredSource(dataType, since, until) : undefined
+
   if (bucket !== 'none' && !RAW_ALWAYS_TYPES.has(dataType) && since) {
     const aggFn = aggMode(dataType) === 'sum' ? 'SUM' : 'AVG'
-    const rows = await prisma.$queryRawUnsafe<Array<{ bucket: Date; agg: number | null }>>(
-      `SELECT date_trunc('${bucket}', "startTime") as bucket, ${aggFn}("value")::float as agg
-       FROM "DataPoint"
-       WHERE "dataType" = $1 AND "startTime" >= $2 AND "startTime" < $3
-       GROUP BY bucket ORDER BY bucket ASC`,
-      dataType,
-      since,
-      until
-    )
+    const rows = source
+      ? await prisma.$queryRawUnsafe<Array<{ bucket: Date; agg: number | null }>>(
+          `SELECT date_trunc('${bucket}', "startTime") as bucket, ${aggFn}("value")::float as agg
+           FROM "DataPoint"
+           WHERE "dataType" = $1 AND "startTime" >= $2 AND "startTime" < $3 AND "source" = $4
+           GROUP BY bucket ORDER BY bucket ASC`,
+          dataType,
+          since,
+          until,
+          source
+        )
+      : await prisma.$queryRawUnsafe<Array<{ bucket: Date; agg: number | null }>>(
+          `SELECT date_trunc('${bucket}', "startTime") as bucket, ${aggFn}("value")::float as agg
+           FROM "DataPoint"
+           WHERE "dataType" = $1 AND "startTime" >= $2 AND "startTime" < $3
+           GROUP BY bucket ORDER BY bucket ASC`,
+          dataType,
+          since,
+          until
+        )
     return NextResponse.json({
       total: rows.length,
       points: rows.map((r) => ({
@@ -60,6 +75,7 @@ export async function GET(req: NextRequest) {
   const where = {
     dataType,
     ...(since ? { startTime: { gte: since, lt: until } } : {}),
+    ...(source ? { source } : {}),
   }
 
   const [points, total] = await Promise.all([

@@ -1,7 +1,5 @@
 import { prisma } from '@/lib/prisma'
-import SyncButton from '@/components/SyncButton'
-import TrendsSection from '@/components/TrendsSection'
-import DataExplorer from '@/components/DataExplorer'
+import DashboardClient from '@/components/DashboardClient'
 
 export const dynamic = 'force-dynamic'
 
@@ -10,26 +8,20 @@ export default async function DashboardPage() {
 
   return (
     <main className="page">
-      <div className="status-row">
-        <h1 style={{ fontSize: 20, margin: 0 }}>Health Tracker</h1>
-        {account ? <SyncButton /> : <a className="btn" href="/api/auth/connect">Connect Google account</a>}
-      </div>
-
       {!account && (
-        <p className="muted">
-          Connect your Google account (linked to your Fitbit Air) to start pulling heart rate and
-          other health data.
-        </p>
-      )}
-
-      {account && (
         <>
-          <TrendsSection />
-
-          <h2 className="section-title">Explore raw data</h2>
-          <DataExplorer />
+          <div className="status-row">
+            <h1 style={{ fontSize: 20, margin: 0 }}>Health Tracker</h1>
+            <a className="btn" href="/api/auth/connect">Connect Google account</a>
+          </div>
+          <p className="muted">
+            Connect your Google account (linked to your Fitbit Air) to start pulling heart rate and
+            other health data.
+          </p>
         </>
       )}
+
+      {account && <DashboardClient />}
     </main>
   )
 }

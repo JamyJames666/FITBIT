@@ -72,30 +72,47 @@ body {
 }
 
 .page {
-  max-width: 1400px;
+  max-width: 1500px;
   margin: 0 auto;
-  padding: 32px 24px;
+  padding: 40px 32px 64px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 28px;
 }
 
 .card {
   background: var(--surface-1);
   border: 1px solid var(--border);
   border-radius: 12px;
-  padding: 20px;
+  padding: 24px;
 }
 
 .chart-card {
-  padding: 20px 20px 12px;
+  padding: 22px 24px 16px;
 }
 
 .card-title {
-  margin: 0 0 12px;
+  margin: 0 0 14px;
   font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
+}
+
+.chart-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.chart-header .card-title {
+  margin-bottom: 0;
+}
+
+.chart-truncated {
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .card-empty {
@@ -123,6 +140,29 @@ body {
   font-size: 12px;
   color: var(--text-secondary);
   margin-top: 2px;
+}
+
+.viz-tooltip-flag {
+  font-size: 11px;
+  color: var(--series-8);
+  margin-top: 6px;
+  max-width: 180px;
+}
+
+.sync-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.sync-hint {
+  white-space: nowrap;
 }
 
 .btn {
@@ -156,20 +196,20 @@ body {
   color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  margin: 8px 0 0;
+  margin: 12px 0 0;
 }
 
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 16px;
 }
 
 .stat-tile {
   background: var(--surface-1);
   border: 1px solid var(--border);
   border-radius: 12px;
-  padding: 14px 16px;
+  padding: 18px 20px;
 }
 
 .stat-tile-label {
@@ -178,10 +218,10 @@ body {
 }
 
 .stat-tile-value {
-  font-size: 24px;
+  font-size: 26px;
   font-weight: 600;
   color: var(--text-primary);
-  margin-top: 4px;
+  margin-top: 6px;
 }
 
 .stat-tile-value .unit {
@@ -198,15 +238,17 @@ body {
 
 .chart-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(480px, 1fr));
-  gap: 20px;
+  grid-template-columns: repeat(auto-fit, minmax(520px, 1fr));
+  gap: 28px;
+  margin-top: 4px;
 }
 
 .range-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   flex-wrap: wrap;
+  margin: 4px 0;
 }
 
 .range-btn {
@@ -314,4 +356,51 @@ body {
 .pagination button:disabled {
   opacity: 0.4;
   cursor: default;
+}
+
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.login-card {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 32px;
+  width: 100%;
+  max-width: 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.login-title {
+  margin: 0;
+  font-size: 20px;
+  color: var(--text-primary);
+}
+
+.login-input {
+  background: var(--page-plane);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
+.login-error {
+  color: var(--series-8);
+  font-size: 13px;
+  margin: -6px 0 0;
+}
+
+.login-submit {
+  width: 100%;
+  text-align: center;
+  margin-top: 4px;
 }
