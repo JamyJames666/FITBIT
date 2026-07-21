@@ -7,6 +7,17 @@
 export const AUTH_COOKIE = 'ht_auth'
 const COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60 // 30 days
 
+// Behind Dokploy's Traefik proxy, req.nextUrl/req.url resolve to the
+// container's internal bind address (0.0.0.0:3000) rather than the public
+// domain — building redirects from it sent the browser to
+// https://0.0.0.0:3000/. Always anchor absolute redirect URLs to
+// NEXT_PUBLIC_BASE_URL instead (same fix already used by oauth2callback).
+export function absoluteUrl(pathname: string, params?: Record<string, string>): URL {
+  const url = new URL(pathname, process.env.NEXT_PUBLIC_BASE_URL)
+  if (params) for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v)
+  return url
+}
+
 // Both must be set (APP_PASSWORD is the shared password, SESSION_SECRET signs
 // the cookie) — checked up front so a missing env var fails closed with a
 // clear message instead of throwing mid-request on every page load.
