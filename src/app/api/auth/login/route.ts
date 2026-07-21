@@ -1,7 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { AUTH_COOKIE, AUTH_COOKIE_OPTIONS, isValidPassword, makeSessionToken } from '@/lib/auth'
+import { AUTH_COOKIE, AUTH_COOKIE_OPTIONS, isAuthConfigured, isValidPassword, makeSessionToken } from '@/lib/auth'
 
 export async function POST(req: NextRequest) {
+  if (!isAuthConfigured()) {
+    const url = req.nextUrl.clone()
+    url.pathname = '/login'
+    url.search = ''
+    return NextResponse.redirect(url)
+  }
+
   const form = await req.formData()
   const password = String(form.get('password') ?? '')
   const next = String(form.get('next') ?? '/')

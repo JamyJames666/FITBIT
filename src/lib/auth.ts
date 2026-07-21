@@ -3,6 +3,13 @@ import { createHmac, timingSafeEqual } from 'crypto'
 export const AUTH_COOKIE = 'ht_auth'
 const COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60 // 30 days
 
+// Both must be set (APP_PASSWORD is the shared password, SESSION_SECRET signs
+// the cookie) — checked up front so a missing env var fails closed with a
+// clear message instead of throwing mid-request on every page load.
+export function isAuthConfigured(): boolean {
+  return Boolean(process.env.APP_PASSWORD && process.env.SESSION_SECRET)
+}
+
 function sessionSecret() {
   const secret = process.env.SESSION_SECRET
   if (!secret) throw new Error('SESSION_SECRET is not set')
