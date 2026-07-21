@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
   const next = String(form.get('next') ?? '/')
   const safeNext = next.startsWith('/') && !next.startsWith('//') ? next : '/'
 
-  if (!isValidPassword(password)) {
+  if (!(await isValidPassword(password))) {
     const url = req.nextUrl.clone()
     url.pathname = '/login'
     url.search = ''
@@ -27,6 +27,6 @@ export async function POST(req: NextRequest) {
   url.pathname = safeNext
   url.search = ''
   const res = NextResponse.redirect(url)
-  res.cookies.set(AUTH_COOKIE, makeSessionToken(), AUTH_COOKIE_OPTIONS)
+  res.cookies.set(AUTH_COOKIE, await makeSessionToken(), AUTH_COOKIE_OPTIONS)
   return res
 }

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { AUTH_COOKIE, isAuthConfigured, isValidSessionToken } from '@/lib/auth'
 
-export function middleware(req: NextRequest) {
+export async function middleware(req: NextRequest) {
   // Fail closed (never serve real content) but without crashing — the login
   // page itself explains that APP_PASSWORD/SESSION_SECRET need setting.
   if (!isAuthConfigured()) {
@@ -12,7 +12,7 @@ export function middleware(req: NextRequest) {
   }
 
   const token = req.cookies.get(AUTH_COOKIE)?.value
-  if (isValidSessionToken(token)) return NextResponse.next()
+  if (await isValidSessionToken(token)) return NextResponse.next()
 
   const url = req.nextUrl.clone()
   url.pathname = '/login'
