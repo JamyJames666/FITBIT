@@ -14,17 +14,7 @@ import {
   YAxis,
 } from 'recharts'
 import { useSync } from './DashboardClient'
-
-export interface RangeConfig {
-  hours?: number
-  since?: string
-  until?: string
-  bucket: 'none' | 'hour' | 'day'
-  // Total span of the selected period in days — drives tick formatting
-  // (e.g. sleep is always fetched raw/unbucketed, but still needs date
-  // labels instead of time-of-day once the span crosses a day).
-  spanDays: number
-}
+import { pickBucket } from '@/lib/metricMeta'
 
 interface Point {
   startTime: string
@@ -34,14 +24,14 @@ interface Point {
 // A wheel notch (mouse) or a settled trackpad gesture zooms by this factor;
 // deltaY > 0 (scroll down) zooms out, < 0 zooms in — matches trading charts.
 const WHEEL_ZOOM_FACTOR = 0.85
-const WHEEL_DEBOUNCE_MS = 120
+const WHEEL_DEBOUNCE_MS = 60
 const MIN_SPAN_MS = 2 * 60_000
 const MAX_POINTS = 20_000
 
-function formatTick(iso: string, range: Pick<RangeConfig, 'bucket' | 'spanDays'>) {
+function formatTick(iso: string, spanDays: number, bucket: 'none' | 'hour' | 'day') {
   const d = new Date(iso)
-  if (range.spanDays <= 1) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-  if (range.bucket === 'hour') return d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric' })
+  if (spanDays <= 1) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  if (bucket === 'hour') return d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric' })
   return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
 
@@ -50,7 +40,7 @@ function formatAxisNumber(v: number) {
   return Number.isInteger(v) ? String(v) : v.toFixed(1)
 }
 
-function makeTooltip(unit: string, range: RangeConfig, artifactBelow?: number) {
+function makeTooltip(unit: string, spanDays: number, bucket: 'none' | 'hour' | 'day', artifactBelow?: number) {
   return function CustomTooltip({ active, payload }: any) {
     if (!active || !payload?.length) return null
     const point: Point = payload[0].payload
@@ -60,7 +50,7 @@ function makeTooltip(unit: string, range: RangeConfig, artifactBelow?: number) {
         <div className="viz-tooltip-value">
           {point.value != null ? `${point.value.toLocaleString(undefined, { maximumFractionDigits: 1 })} ${unit}` : '—'}
         </div>
-        <div className="viz-tooltip-time">{formatTick(point.startTime, range)}</div>
+        <div className="viz-tooltip-time">{formatTick(point.startTime, spanDays, bucket)}</div>
         {isArtifact && <div className="viz-tooltip-flag">Likely sensor artifact (motion / poor contact)</div>}
       </div>
     )
@@ -84,42 +74,64 @@ export default function TrendChart({
   dataType,
   title,
   unit,
-  range,
+  baseSince,
+  baseUntil,
+  resetKey,
   chartType = 'line',
   seriesSlot = 1,
-  onZoom,
   transform,
   artifactBelow,
 }: {
   dataType: string
   title: string
   unit: string
-  range: RangeConfig
+  baseSince: string
+  baseUntil: string
+  resetKey: string
   chartType?: 'line' | 'bar'
   seriesSlot?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8
-  onZoom?: (sinceISO: string, untilISO: string) => void
   transform?: (value: number) => number
   artifactBelow?: number
 }) {
   const [points, setPoints] = useState<Point[] | null>(null)
   const [total, setTotal] = useState(0)
+  const [zoom, setZoom] = useState<{ since: string; until: string } | null>(null)
   const [dragStart, setDragStart] = useState<string | null>(null)
   const [dragEnd, setDragEnd] = useState<string | null>(null)
   const color = `var(--series-${seriesSlot})`
   const { refreshToken } = useSync()
 
-  const rangeRef = useRef(range)
-  rangeRef.current = range
+  // The top-level Day/Week/Month/Custom picker owns the "base" window; each
+  // chart layers its own independent zoom on top so scrolling on one metric
+  // never disturbs the other eight. Changing the base window resets it.
+  useEffect(() => {
+    setZoom(null)
+  }, [resetKey])
+
+  const since = zoom?.since ?? baseSince
+  const until = zoom?.until ?? baseUntil
+  const spanDays = (new Date(until).getTime() - new Date(since).getTime()) / 86_400_000
+  const bucket = pickBucket(dataType, spanDays)
+
+  const containerRef = useRef<HTMLDivElement>(null)
+  const sinceRef = useRef(since)
+  sinceRef.current = since
+  const untilRef = useRef(until)
+  untilRef.current = until
   const hoverRef = useRef<string | null>(null)
   const wheelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const wheelFactorRef = useRef(1)
 
   useEffect(() => {
     let cancelled = false
-    const params = new URLSearchParams({ dataType, bucket: range.bucket, limit: String(MAX_POINTS), dedupe: '1' })
-    if (range.since) params.set('since', range.since)
-    if (range.until) params.set('until', range.until)
-    if (range.hours != null) params.set('hours', String(range.hours))
+    const params = new URLSearchParams({
+      dataType,
+      bucket,
+      since,
+      until,
+      limit: String(MAX_POINTS),
+      dedupe: '1',
+    })
 
     fetch(`/api/data-points?${params.toString()}`)
       .then((r) => r.json())
@@ -139,26 +151,11 @@ export default function TrendChart({
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dataType, range.hours, range.since, range.until, range.bucket, refreshToken])
-
-  const hasData = points && points.some((p) => p.value != null)
-  const tickFmt = (iso: string) => formatTick(iso, range)
-  const truncated = range.bucket === 'none' && total > (points?.length ?? 0)
-
-  function commitDragZoom() {
-    if (dragStart && dragEnd && dragStart !== dragEnd && onZoom) {
-      const [lo, hi] = [dragStart, dragEnd].sort()
-      onZoom(lo, hi)
-    }
-    setDragStart(null)
-    setDragEnd(null)
-  }
+  }, [dataType, since, until, bucket, refreshToken])
 
   function commitWheelZoom(factor: number) {
-    const r = rangeRef.current
-    if (!onZoom || !r.since || !r.until) return
-    const sinceMs = new Date(r.since).getTime()
-    const untilMs = new Date(r.until).getTime()
+    const sinceMs = new Date(sinceRef.current).getTime()
+    const untilMs = new Date(untilRef.current).getTime()
     const anchorMs = hoverRef.current ? new Date(hoverRef.current).getTime() : (sinceMs + untilMs) / 2
 
     let newSince = anchorMs - (anchorMs - sinceMs) * factor
@@ -168,62 +165,86 @@ export default function TrendChart({
       newSince = mid - MIN_SPAN_MS / 2
       newUntil = mid + MIN_SPAN_MS / 2
     }
-    onZoom(new Date(newSince).toISOString(), new Date(newUntil).toISOString())
+    setZoom({ since: new Date(newSince).toISOString(), until: new Date(newUntil).toISOString() })
   }
 
-  function handleWheel(e: React.WheelEvent) {
-    if (!onZoom) return
-    e.preventDefault()
-    const tickFactor = e.deltaY > 0 ? 1 / WHEEL_ZOOM_FACTOR : WHEEL_ZOOM_FACTOR
-    // Compound ticks that land within one debounce window into a single
-    // committed zoom — a trackpad fires dozens of small deltas per gesture,
-    // and re-fetching all charts on every one of them would be very janky.
-    wheelFactorRef.current = wheelTimerRef.current ? wheelFactorRef.current * tickFactor : tickFactor
-    if (wheelTimerRef.current) clearTimeout(wheelTimerRef.current)
-    wheelTimerRef.current = setTimeout(() => {
-      commitWheelZoom(wheelFactorRef.current)
-      wheelTimerRef.current = null
-      wheelFactorRef.current = 1
-    }, WHEEL_DEBOUNCE_MS)
+  // React's synthetic onWheel is attached as a passive listener, so
+  // e.preventDefault() inside it is silently ignored — the page scrolls
+  // underneath the chart at the same time it tries to zoom, which is what
+  // actually made this feel broken. A manually-attached, non-passive native
+  // listener is the only way to actually stop page scroll here.
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const handler = (e: WheelEvent) => {
+      e.preventDefault()
+      const tickFactor = e.deltaY > 0 ? 1 / WHEEL_ZOOM_FACTOR : WHEEL_ZOOM_FACTOR
+      wheelFactorRef.current = wheelTimerRef.current ? wheelFactorRef.current * tickFactor : tickFactor
+      if (wheelTimerRef.current) clearTimeout(wheelTimerRef.current)
+      wheelTimerRef.current = setTimeout(() => {
+        commitWheelZoom(wheelFactorRef.current)
+        wheelTimerRef.current = null
+        wheelFactorRef.current = 1
+      }, WHEEL_DEBOUNCE_MS)
+    }
+    el.addEventListener('wheel', handler, { passive: false })
+    return () => el.removeEventListener('wheel', handler)
+  }, [])
+
+  function commitDragZoom() {
+    if (dragStart && dragEnd && dragStart !== dragEnd) {
+      const [lo, hi] = [dragStart, dragEnd].sort()
+      setZoom({ since: lo, until: hi })
+    }
+    setDragStart(null)
+    setDragEnd(null)
   }
 
-  const dragHandlers = onZoom
-    ? {
-        onMouseDown: (e: any) => e?.activeLabel && setDragStart(e.activeLabel),
-        onMouseMove: (e: any) => {
-          if (e?.activeLabel) hoverRef.current = e.activeLabel
-          if (dragStart && e?.activeLabel) setDragEnd(e.activeLabel)
-        },
-        onMouseUp: commitDragZoom,
-        onMouseLeave: () => {
-          setDragStart(null)
-          setDragEnd(null)
-        },
-        onWheel: handleWheel,
-      }
-    : {}
+  const dragHandlers = {
+    onMouseDown: (e: any) => e?.activeLabel && setDragStart(e.activeLabel),
+    onMouseMove: (e: any) => {
+      if (e?.activeLabel) hoverRef.current = e.activeLabel
+      if (dragStart && e?.activeLabel) setDragEnd(e.activeLabel)
+    },
+    onMouseUp: commitDragZoom,
+    onMouseLeave: () => {
+      setDragStart(null)
+      setDragEnd(null)
+    },
+  }
+
+  const hasData = points && points.some((p) => p.value != null)
+  const tickFmt = (iso: string) => formatTick(iso, spanDays, bucket)
+  const truncated = bucket === 'none' && total > (points?.length ?? 0)
 
   return (
-    <div className="viz-root card chart-card">
+    <div className="viz-root card chart-card" style={{ borderTop: `3px solid ${color}` }} ref={containerRef}>
       <div className="chart-header">
         <h3 className="card-title">{title}</h3>
-        {truncated && (
-          <span className="muted chart-truncated">
-            Showing {points!.length.toLocaleString()} of {total.toLocaleString()} points
-          </span>
-        )}
+        <div className="chart-header-meta">
+          {truncated && (
+            <span className="muted chart-truncated">
+              Showing {points!.length.toLocaleString()} of {total.toLocaleString()}
+            </span>
+          )}
+          {zoom && (
+            <button className="chart-reset-btn" onClick={() => setZoom(null)}>
+              Reset zoom
+            </button>
+          )}
+        </div>
       </div>
       {!points ? (
-        <div className="card-empty">Loading…</div>
+        <div className="card-empty skeleton" />
       ) : !hasData ? (
         <div className="card-empty">No data synced yet.</div>
       ) : (
-        <ResponsiveContainer width="100%" height={320}>
+        <ResponsiveContainer width="100%" height={380}>
           {chartType === 'bar' ? (
             <BarChart
               data={points}
               margin={{ top: 8, right: 12, bottom: 0, left: 0 }}
-              style={{ cursor: onZoom ? 'crosshair' : undefined, userSelect: 'none' }}
+              style={{ cursor: 'crosshair', userSelect: 'none' }}
               {...dragHandlers}
             >
               <CartesianGrid vertical={false} stroke="var(--gridline)" strokeWidth={1} />
@@ -244,7 +265,7 @@ export default function TrendChart({
                 width={52}
                 tickFormatter={formatAxisNumber}
               />
-              <Tooltip content={makeTooltip(unit, range, artifactBelow)} cursor={{ fill: 'var(--gridline)' }} />
+              <Tooltip content={makeTooltip(unit, spanDays, bucket, artifactBelow)} cursor={{ fill: 'var(--gridline)' }} />
               <Bar dataKey="value" fill={color} radius={[4, 4, 0, 0]} maxBarSize={28} isAnimationActive={false} />
               {dragStart && dragEnd && (
                 <ReferenceArea x1={dragStart} x2={dragEnd} fill={color} fillOpacity={0.15} stroke={color} strokeOpacity={0.4} />
@@ -254,7 +275,7 @@ export default function TrendChart({
             <LineChart
               data={points}
               margin={{ top: 8, right: 12, bottom: 0, left: 0 }}
-              style={{ cursor: onZoom ? 'crosshair' : undefined, userSelect: 'none' }}
+              style={{ cursor: 'crosshair', userSelect: 'none' }}
               {...dragHandlers}
             >
               <CartesianGrid vertical={false} stroke="var(--gridline)" strokeWidth={1} />
@@ -276,7 +297,7 @@ export default function TrendChart({
                 domain={['auto', 'auto']}
                 tickFormatter={formatAxisNumber}
               />
-              <Tooltip content={makeTooltip(unit, range, artifactBelow)} cursor={{ stroke: 'var(--baseline)', strokeWidth: 1 }} />
+              <Tooltip content={makeTooltip(unit, spanDays, bucket, artifactBelow)} cursor={{ stroke: 'var(--baseline)', strokeWidth: 1 }} />
               <Line
                 type="monotone"
                 dataKey="value"

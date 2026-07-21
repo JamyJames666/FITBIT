@@ -1,3 +1,5 @@
+import type { CSSProperties } from 'react'
+
 function formatValue(value: number, unit: string) {
   if (unit === 'min') {
     const h = Math.floor(value / 60)
@@ -13,13 +15,15 @@ export default function StatTile({
   label,
   value,
   unit,
+  accent,
 }: {
   label: string
   value: number | null
   unit: string
+  accent?: string
 }) {
   return (
-    <div className="stat-tile">
+    <div className="stat-tile" style={accent ? ({ '--tile-accent': accent } as CSSProperties) : undefined}>
       <div className="stat-tile-label">{label}</div>
       <div className="stat-tile-value">
         {value == null ? (

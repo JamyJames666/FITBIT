@@ -1,9 +1,8 @@
 'use client'
 
 import { useState } from 'react'
-import TrendChart, { RangeConfig } from './TrendChart'
+import TrendChart from './TrendChart'
 import SummaryStats from './SummaryStats'
-import { RAW_ALWAYS_TYPES, SUM_TYPES } from '@/lib/metricMeta'
 
 type Timeframe = 'day' | 'week' | 'month' | 'custom'
 
@@ -57,35 +56,14 @@ function todayInputValue(daysAgo = 0) {
 
 export default function TrendsSection() {
   const [timeframe, setTimeframe] = useState<Timeframe>('day')
-  // Full ISO timestamps, not just dates — a scroll/drag zoom needs
-  // sub-day precision, only the manual date-picker inputs below round to
-  // whole days.
   const [customSince, setCustomSince] = useState(todayInputValue(7) + 'T00:00:00.000Z')
   const [customUntil, setCustomUntil] = useState(todayInputValue(0) + 'T23:59:59.999Z')
 
   const since = timeframe === 'custom' ? customSince : new Date(Date.now() - hoursFor(timeframe) * 3_600_000).toISOString()
   const until = timeframe === 'custom' ? customUntil : new Date().toISOString()
-  const spanDays = (new Date(until).getTime() - new Date(since).getTime()) / 86_400_000
-
-  function chartRange(dataType: string): RangeConfig {
-    if (RAW_ALWAYS_TYPES.has(dataType)) return { since, until, bucket: 'none', spanDays }
-    const isSum = SUM_TYPES.has(dataType)
-    let bucket: RangeConfig['bucket']
-    // Progressively finer as the window narrows — zoomed in far enough,
-    // every chart (including cumulative-count ones like steps) shows raw
-    // unbucketed points rather than an hourly rollup.
-    if (spanDays <= 0.25) bucket = 'none'
-    else if (spanDays <= 2) bucket = isSum ? 'hour' : 'none'
-    else if (spanDays <= 10) bucket = isSum ? 'day' : 'hour'
-    else bucket = 'day'
-    return { since, until, bucket, spanDays }
-  }
-
-  function handleZoom(sinceISO: string, untilISO: string) {
-    setTimeframe('custom')
-    setCustomSince(sinceISO)
-    setCustomUntil(untilISO)
-  }
+  // Changing this string is what tells every chart "the picked period moved,
+  // drop your local zoom and go back to the full base window."
+  const resetKey = `${timeframe}|${since}|${until}`
 
   function setCustomDate(which: 'since' | 'until', dateValue: string) {
     if (which === 'since') setCustomSince(dateValue + 'T00:00:00.000Z')
@@ -124,7 +102,9 @@ export default function TrendsSection() {
             <input type="date" value={customUntil.slice(0, 10)} onChange={(e) => setCustomDate('until', e.target.value)} />
           </span>
         )}
-        <span className="muted range-hint">Drag to zoom, or scroll on a chart to zoom in/out around the cursor.</span>
+        <span className="muted range-hint">
+          Scroll or drag on a chart to zoom into it — each one zooms independently.
+        </span>
       </div>
 
       <div className="chart-grid">
@@ -136,8 +116,9 @@ export default function TrendsSection() {
             unit={c.unit}
             chartType={c.chartType}
             seriesSlot={c.seriesSlot}
-            range={chartRange(c.dataType)}
-            onZoom={handleZoom}
+            baseSince={since}
+            baseUntil={until}
+            resetKey={resetKey}
             transform={c.transform}
             artifactBelow={c.artifactBelow}
           />

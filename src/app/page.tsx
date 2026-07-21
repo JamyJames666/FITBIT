@@ -11,7 +11,7 @@ export default async function DashboardPage() {
       {!account && (
         <>
           <div className="status-row">
-            <h1 style={{ fontSize: 20, margin: 0 }}>Health Tracker</h1>
+            <h1 className="page-title">Health Tracker</h1>
             <a className="btn" href="/api/auth/connect">Connect Google account</a>
           </div>
           <p className="muted">

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import StatTile from './StatTile'
 import { useSync } from './DashboardClient'
+import { METRIC_ACCENT } from '@/lib/metricMeta'
 
 interface Metric {
   label: string
@@ -26,12 +27,20 @@ export default function SummaryStats({ since, until }: { since: string; until: s
     }
   }, [since, until, refreshToken])
 
-  if (!metrics) return <div className="card-empty">Loading…</div>
+  if (!metrics) {
+    return (
+      <div className="stat-grid">
+        {Array.from({ length: 10 }).map((_, i) => (
+          <div key={i} className="card-empty skeleton stat-tile-skeleton" />
+        ))}
+      </div>
+    )
+  }
 
   return (
     <div className="stat-grid">
-      {Object.values(metrics).map((m) => (
-        <StatTile key={m.label} label={m.label} value={m.value} unit={m.unit} />
+      {Object.entries(metrics).map(([key, m]) => (
+        <StatTile key={m.label} label={m.label} value={m.value} unit={m.unit} accent={METRIC_ACCENT[key]} />
       ))}
     </div>
   )

@@ -56,7 +56,7 @@ export default function DashboardClient() {
   return (
     <SyncCtx.Provider value={{ status, lastSyncedAt, refreshToken, runSync }}>
       <div className="status-row">
-        <h1 style={{ fontSize: 20, margin: 0 }}>Health Tracker</h1>
+        <h1 className="page-title">Health Tracker</h1>
         <div className="header-actions">
           <SyncButton />
           <form action="/api/auth/logout" method="POST">

@@ -30,3 +30,29 @@ export const RAW_ALWAYS_TYPES = new Set([
 export function aggMode(dataType: string): 'sum' | 'avg' {
   return SUM_TYPES.has(dataType) ? 'sum' : 'avg'
 }
+
+// Picks the bucket granularity for a chart given how wide its *currently
+// visible* window is — called per-chart (not once globally) so zooming
+// into one metric doesn't affect any other chart's granularity.
+// Matches each /api/summary metric key to the same series color its trend
+// chart uses below, so a stat tile visually points at its own chart.
+export const METRIC_ACCENT: Record<string, string> = {
+  heartRate: 'var(--series-1)',
+  steps: 'var(--series-2)',
+  distance: 'var(--series-3)',
+  calories: 'var(--series-4)',
+  activeMinutes: 'var(--series-5)',
+  hrv: 'var(--series-6)',
+  spo2: 'var(--series-7)',
+  restingHeartRate: 'var(--series-8)',
+  sleep: 'var(--series-1)',
+}
+
+export function pickBucket(dataType: string, spanDays: number): 'none' | 'hour' | 'day' {
+  if (RAW_ALWAYS_TYPES.has(dataType)) return 'none'
+  const isSum = SUM_TYPES.has(dataType)
+  if (spanDays <= 0.25) return 'none'
+  if (spanDays <= 2) return isSum ? 'hour' : 'none'
+  if (spanDays <= 10) return isSum ? 'day' : 'hour'
+  return 'day'
+}
