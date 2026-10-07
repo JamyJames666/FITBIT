@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import Brief from './Brief'
 import DataExplorer from './DataExplorer'
 import Icon from './Icon'
+import DeepPanels from './DeepPanels'
 import ModelPanels from './ModelPanels'
 import SyncButton from './SyncButton'
 import ThemeToggle from './ThemeToggle'
@@ -96,6 +97,15 @@ export default function DashboardClient({ connected = true }: { connected?: bool
             <h2 className="section-label">Models</h2>
           </div>
           <ModelPanels />
+
+          <div className="section-head">
+            <h2 className="section-label">The heavier models</h2>
+            <p className="section-blurb">
+              Everything above scores a day against your own baseline. These fit a model to the
+              whole window instead, and each says what it found and how sure it is.
+            </p>
+          </div>
+          <DeepPanels />
 
           <div className="section-head">
             <h2 className="section-label">Raw data</h2>

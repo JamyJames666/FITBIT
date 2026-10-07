@@ -233,6 +233,12 @@ a {
   display: flex;
   align-items: center;
   gap: 10px;
+  /* Wraps instead of pushing the page wider. Without this the sync chip and the
+     theme toggle together run about 8px past the viewport on a 390px phone,
+     which gives the whole document a horizontal scroll. */
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-width: 0;
 }
 
 /* ----------------------------------------------------------- the brief */
@@ -1050,5 +1056,202 @@ code {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+/* ------------------------------------------------------ heavier models */
+
+.section-blurb {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink-3);
+  max-width: 62ch;
+}
+
+/* One cell per day. A fixed minimum width with wrapping rather than a flex
+   stretch, so a 30 day window and a 180 day window read at the same density
+   instead of one being drawn as fat blocks. */
+.ribbon {
+  display: flex;
+  /* One row, never two. Wrapping puts the end of the window directly under its
+     start, which makes the two date labels under the band a lie. */
+  flex-wrap: nowrap;
+  /* 1px rather than 2. At 180 days a 2px gap is a third of the band's width and
+     reads as a dotted rule instead of a timeline. */
+  gap: 1px;
+  margin: 4px 0 8px;
+}
+
+.ribbon-cell {
+  /* Grows to fill the card rather than sitting at a fixed width, so a 90 day
+     and a 365 day window both read as one continuous band instead of the short
+     one trailing off into empty space. */
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 16px;
+  height: 22px;
+  border-radius: 2px;
+  background: var(--cell, var(--series-1));
+  transition: transform 120ms var(--ease);
+}
+
+.ribbon-cell:hover {
+  transform: scaleY(1.18);
+}
+
+.ribbon-ends {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono), monospace;
+  font-size: 11px;
+  color: var(--ink-3);
+  margin-bottom: 14px;
+}
+
+.state-now {
+  margin: 4px 0 20px;
+  padding: 13px 15px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--raised);
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+
+.state-now strong {
+  color: var(--ink);
+}
+
+.state-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+}
+
+.state-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 15px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.state-name {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.state-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--swatch, var(--series-1));
+  flex: none;
+}
+
+.state-meta {
+  margin: 0;
+  font-family: var(--font-mono), monospace;
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+.state-traits {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.state-trait {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+.state-trait-value {
+  font-family: var(--font-mono), monospace;
+  color: var(--ink);
+}
+
+/* -------------------------------------------------------------- factors */
+
+.loading-block {
+  margin-bottom: 16px;
+}
+
+.loading-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 2px;
+}
+
+.loading-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.loading-share {
+  font-family: var(--font-mono), monospace;
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+/* --------------------------------------------------------------- forest */
+
+.forest-list {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.forest-item {
+  display: grid;
+  grid-template-columns: 72px 62px 1fr;
+  gap: 12px;
+  align-items: baseline;
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+  font-size: 12.5px;
+}
+
+.forest-date {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.forest-score {
+  font-family: var(--font-mono), monospace;
+  color: var(--serious);
+}
+
+.forest-why {
+  color: var(--ink-3);
+}
+
+@media (max-width: 640px) {
+  .forest-item {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .forest-why {
+    grid-column: 1 / -1;
   }
 }

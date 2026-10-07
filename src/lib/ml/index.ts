@@ -6,6 +6,11 @@ import { Decomposition, decompose } from './decompose'
 import { Forecast, forecast } from './forecast'
 import { DayRow, METRIC_LABELS, METRIC_UNITS, MetricKey, loadDayFrame } from './frame'
 import { BAND_COPY, Readiness, computeReadiness } from './readiness'
+import { FactorResult, factorise } from './factors'
+import { ForestResult, isolationForest } from './isolation'
+import { GpForecast, gpForecast } from './gp'
+import { NetResult, trainNet } from './net'
+import { StateModel, fitStates } from './states'
 
 export interface Decision {
   id: string
@@ -26,6 +31,11 @@ export interface Insights {
   clusters: ClusterResult | null
   attributions: Attribution[]
   forecasts: Forecast[]
+  states: StateModel | null
+  factors: FactorResult | null
+  forest: ForestResult | null
+  gp: GpForecast[]
+  net: NetResult | null
   decisions: Decision[]
 }
 
@@ -47,6 +57,8 @@ const BASELINE_METRICS: MetricKey[] = [
   'spo2',
 ]
 const FORECAST_METRICS: MetricKey[] = ['steps', 'sleepMinutes', 'restingHeartRate']
+const GP_METRICS: MetricKey[] = ['hrv', 'sleepMinutes', 'steps']
+const DEEP_WINDOW_DAYS = 365
 const RECENT_ANOMALY_DAYS = 14
 const SHOWN_ANOMALY_DAYS = 30
 const MAX_ANOMALIES = 8
@@ -72,6 +84,25 @@ function recent(anomalies: Anomaly[], days: number): Anomaly[] {
   return anomalies.filter((a) => a.date >= cutoff)
 }
 
+// Groups the contributors by direction before listing them, so three metrics
+// that all moved the same way read as one clause rather than as "above baseline
+// and above baseline and above baseline".
+function describeContributors(
+  contributors: Array<{ label: string; z: number }>
+): string {
+  const list = (names: string[]) =>
+    names.length <= 1
+      ? names.join('')
+      : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+
+  const above = contributors.filter((c) => c.z >= 0).map((c) => c.label.toLowerCase())
+  const below = contributors.filter((c) => c.z < 0).map((c) => c.label.toLowerCase())
+  const parts: string[] = []
+  if (above.length) parts.push(`${list(above)} ${above.length > 1 ? 'all ' : ''}above baseline`)
+  if (below.length) parts.push(`${list(below)} ${below.length > 1 ? 'all ' : ''}below baseline`)
+  return parts.join(', with ')
+}
+
 // Every statement here has to trace back to a number a model produced. The
 // alternative is a dashboard that generates advice whether or not the data
 // supports any, which is how health apps lose trust.
@@ -81,7 +112,10 @@ function buildDecisions(
   baselines: Baseline[],
   decomposition: Decomposition | null,
   attributions: Attribution[],
-  forecasts: Forecast[]
+  forecasts: Forecast[],
+  states: StateModel | null,
+  forest: ForestResult | null,
+  net: NetResult | null
 ): Decision[] {
   const decisions: Decision[] = []
 
@@ -172,12 +206,86 @@ function buildDecisions(
     })
   }
 
+  // The state model earns a line only when it has something to say, so either
+  // the current condition is not the ordinary one, or the run has already gone
+  // past how long that condition usually lasts.
+  if (states?.current) {
+    const { name, runLength, meanDwellDays, changeTomorrow, likelyNext } = states.current
+    const overdue = Number.isFinite(meanDwellDays) && runLength > meanDwellDays
+    if (name !== 'Typical' || overdue) {
+      const dwell = Number.isFinite(meanDwellDays) ? `${meanDwellDays.toFixed(1)} days` : 'unclear'
+      decisions.push({
+        id: 'state',
+        headline: `${runLength} ${runLength === 1 ? 'day' : 'days'} in the ${name.toLowerCase()} state`,
+        detail:
+          `That state has typically run ${dwell} at a time, and the fitted transition ` +
+          `probabilities put the chance of moving tomorrow at ${Math.round(changeTomorrow * 100)} per cent` +
+          (likelyNext ? `, most likely into ${likelyNext.name.toLowerCase()}.` : '.'),
+        tone: name === 'Strained' ? 'warn' : name === 'Recovered' ? 'good' : 'neutral',
+        source: `Gaussian hidden Markov model, ${states.stateCount} states chosen by BIC, path by Viterbi`,
+      })
+    }
+  }
+
+  // Only reported when the univariate detector did not already have the day. A
+  // combination anomaly that is also a plain outlier tells the reader nothing
+  // the line above it did not.
+  const alreadyFlagged = new Set(anomalies.filter((a) => a.concerning).map((a) => a.date))
+  const combination = forest?.flagged.find((f) => !alreadyFlagged.has(f.date))
+  if (combination) {
+    decisions.push({
+      id: 'combination',
+      headline: `${humanDate(combination.date)} was unusual as a whole day, not in any one number`,
+      detail:
+        `No single metric was extreme enough to flag on its own. The combination was, driven by ` +
+        describeContributors(combination.contributors) +
+        '.',
+      tone: 'warn',
+      source: `Isolation forest, ${forest?.trees} trees on ${forest?.metrics.length} metrics together`,
+    })
+  }
+
+  // The network reports whichever way the comparison went. A model that loses
+  // to persistence and says nothing is the thing this dashboard exists not to
+  // be, so the losing case gets a line too.
+  if (net) {
+    const top = net.importance[0]
+    decisions.push({
+      id: 'net',
+      headline: net.beatsBaseline
+        ? `Tomorrow's ${net.targetLabel.toLowerCase()} is ${Math.round(net.improvement * 100)} per cent more predictable than guessing today's`
+        : `Tomorrow's ${net.targetLabel.toLowerCase()} is no more predictable than guessing today's`,
+      detail: net.beatsBaseline
+        ? `On ${net.testDays} held-out days the network was off by ${net.rmse.toFixed(1)} ${net.unit} against ` +
+          `${net.baselineRmse.toFixed(1)} for assuming no change. ${top.label} mattered most.` +
+          (net.importance.some((i) => i.harmful)
+            ? ` It would do better without ${net.importance
+                .filter((i) => i.harmful)
+                .map((i) => i.label.toLowerCase())
+                .join(' and ')}.`
+            : '')
+        : `On ${net.testDays} held-out days it was off by ${net.rmse.toFixed(1)} ${net.unit} against ` +
+          `${net.baselineRmse.toFixed(1)} for assuming no change, so there is no signal here worth acting on.`,
+      tone: net.beatsBaseline ? 'neutral' : 'neutral',
+      source: `Two layer network, ${net.hidden} hidden units, trained on ${net.trainDays} days and scored on ${net.testDays} it never saw`,
+    })
+  }
+
   return decisions
 }
 
 export async function buildInsights(windowDays = WINDOW_DAYS): Promise<Insights> {
   const frame: DayRow[] = await loadDayFrame(windowDays)
   const daysWithData = frame.filter((d) => Object.keys(d.values).length > 0).length
+
+  // The heavier models read a longer frame than the rest of the page. The window
+  // picker is a reading choice, so 90 days is the right default for "what has
+  // been going on lately". It is not enough to fit a hidden Markov model or to
+  // hold out a test set worth trusting, and squeezing those models into it
+  // produces a confident answer from 70 training rows. One extra SQL pass is
+  // cheaper than a model nobody should believe.
+  const deepFrame: DayRow[] =
+    windowDays >= DEEP_WINDOW_DAYS ? frame : await loadDayFrame(DEEP_WINDOW_DAYS)
 
   const readiness = computeReadiness(frame)
 
@@ -208,6 +316,14 @@ export async function buildInsights(windowDays = WINDOW_DAYS): Promise<Insights>
     (f): f is Forecast => f !== null
   )
 
+  const states = fitStates(deepFrame)
+  const factors = factorise(deepFrame)
+  const forest = isolationForest(deepFrame)
+  const gp = GP_METRICS.map((m) => gpForecast(deepFrame, m)).filter(
+    (g): g is GpForecast => g !== null
+  )
+  const net = trainNet(deepFrame)
+
   return {
     generatedAt: new Date().toISOString(),
     windowDays,
@@ -219,10 +335,30 @@ export async function buildInsights(windowDays = WINDOW_DAYS): Promise<Insights>
     clusters,
     attributions,
     forecasts,
-    decisions: buildDecisions(readiness, anomalies, baselines, decomposition, attributions, forecasts),
+    states,
+    factors,
+    forest,
+    gp,
+    net,
+    decisions: buildDecisions(
+      readiness,
+      anomalies,
+      baselines,
+      decomposition,
+      attributions,
+      forecasts,
+      states,
+      forest,
+      net
+    ),
   }
 }
 
 export { BAND_COPY }
 export type { Readiness, ReadinessComponent } from './readiness'
 export type { Anomaly, Baseline, Decomposition, ClusterResult, Attribution, Forecast }
+export type { StateModel, HiddenState } from './states'
+export type { FactorResult, Component, Loading } from './factors'
+export type { ForestResult, CombinationAnomaly } from './isolation'
+export type { GpForecast } from './gp'
+export type { NetResult, NetImportance } from './net'
