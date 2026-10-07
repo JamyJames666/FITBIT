@@ -1,11 +1,10 @@
 import { prisma } from './prisma'
 
-// Health Connect surfaces the same real-world activity from multiple sources
-// (the Fitbit wearable AND the phone's own pedometer/HealthKit) as separate,
-// often time-overlapping DataPoint rows. Summing/averaging across all of
-// them double-counts steps/distance/etc. Fitbit is the primary wearable, so
-// prefer it whenever it has any data for the window; only fall back to
-// whatever else is present when Fitbit reported nothing at all.
+// Health Connect reports the same walk twice when the Fitbit wearable and the
+// phone's own pedometer both see it, as separate and often overlapping
+// DataPoint rows. Summing across them double-counts. The wearable is the
+// better record, so it wins whenever it has any data for the window, and
+// anything else is used only when the wearable reported nothing at all.
 const PREFERRED_SOURCE = 'FITBIT'
 
 export async function resolvePreferredSource(

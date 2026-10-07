@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { AUTH_COOKIE, absoluteUrl, isAuthConfigured, isValidSessionToken } from '@/lib/auth'
 
 export async function middleware(req: NextRequest) {
-  // Fail closed (never serve real content) but without crashing — the login
-  // page itself explains that APP_PASSWORD/SESSION_SECRET need setting.
+  // Fail closed without crashing. The login page itself explains that
+  // APP_PASSWORD and SESSION_SECRET need setting.
   if (!isAuthConfigured()) {
     return NextResponse.redirect(absoluteUrl('/login'))
   }

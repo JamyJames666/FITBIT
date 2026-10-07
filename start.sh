@@ -1,9 +1,17 @@
 #!/bin/sh
-echo "=== Health Tracker: container started ==="
-echo "=== DATABASE_URL present: $([ -n "$DATABASE_URL" ] && echo YES || echo NO - CHECK ENV VARS) ==="
+set -e
 
-echo "=== Running DB migration ==="
-node_modules/.bin/prisma db push --accept-data-loss 2>&1 || echo "WARNING: DB push failed, server will still start"
+echo "Pulse Engine starting"
 
-echo "=== Starting Next.js on port ${PORT:-3000} ==="
+if [ -z "$DATABASE_URL" ]; then
+  echo "DATABASE_URL is not set, refusing to start"
+  exit 1
+fi
+
+# Applies the schema without the destructive flag. If a change needs a column
+# dropped, run that deliberately rather than letting every container boot do it.
+echo "Applying schema"
+node_modules/.bin/prisma db push
+
+echo "Serving on port ${PORT:-3000}"
 exec node server.js

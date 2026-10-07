@@ -1,5 +1,5 @@
 {
-  "name": "health-tracker",
+  "name": "pulse-engine",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "sync": "tsx scripts/sync.ts"
+    "sync": "tsx scripts/sync.ts",
+    "typecheck": "tsc --noEmit",
+    "seed:demo": "tsx scripts/seed-demo.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.8.0",
@@ -29,5 +31,6 @@
     "eslint-config-next": "14.2.35",
     "tsx": "^4.19.0",
     "typescript": "^5"
-  }
+  },
+  "description": "Health signals in, decisions out."
 }

@@ -1,5 +1,5 @@
-// Standalone sync entrypoint — run via `npm run sync`, e.g. from a Dokploy
-// cron job, so pulling new data doesn't depend on the web server being hit.
+// Standalone sync entrypoint, run via `npm run sync` from a cron job, so
+// pulling new data doesn't depend on the web server being hit.
 import 'dotenv/config'
 import { syncAllDataTypes } from '../src/lib/googleHealth'
 

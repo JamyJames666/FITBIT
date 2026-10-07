@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Bar,
   BarChart,
@@ -21,52 +21,65 @@ interface Point {
   value: number | null
 }
 
-// A wheel notch (mouse) or a settled trackpad gesture zooms by this factor;
-// deltaY > 0 (scroll down) zooms out, < 0 zooms in — matches trading charts.
+// A wheel notch or a settled trackpad gesture zooms by this factor. Scrolling
+// down zooms out, matching every trading chart anyone has used.
 const WHEEL_ZOOM_FACTOR = 0.85
 const WHEEL_DEBOUNCE_MS = 60
 const MIN_SPAN_MS = 2 * 60_000
 const MAX_POINTS = 20_000
 
-function formatTick(iso: string, spanDays: number, bucket: 'none' | 'hour' | 'day') {
+// Every metric chart is a single series that its own title names, so a hue per
+// metric would encode nothing. One signal colour throughout, and the few
+// charts that do carry two meanings get a legend instead.
+const SERIES = 'var(--series-1)'
+const ARTIFACT = 'var(--serious)'
+
+function formatTick(iso: string, spanDays: number, bucket: 'none' | 'hour' | 'day'): string {
   const d = new Date(iso)
-  if (spanDays <= 1) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-  if (bucket === 'hour') return d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric' })
-  return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
+  if (spanDays <= 1) return d.toLocaleTimeString('en-GB', { hour: 'numeric', minute: '2-digit' })
+  if (bucket === 'hour') return d.toLocaleString('en-GB', { month: 'short', day: 'numeric', hour: 'numeric' })
+  return d.toLocaleDateString('en-GB', { month: 'short', day: 'numeric' })
 }
 
-function formatAxisNumber(v: number) {
-  if (Math.abs(v) >= 1000) return Intl.NumberFormat(undefined, { notation: 'compact' }).format(v)
+function formatAxisNumber(v: number): string {
+  if (Math.abs(v) >= 1000) return Intl.NumberFormat('en-GB', { notation: 'compact' }).format(v)
   return Number.isInteger(v) ? String(v) : v.toFixed(1)
 }
 
 function makeTooltip(unit: string, spanDays: number, bucket: 'none' | 'hour' | 'day', artifactBelow?: number) {
-  return function CustomTooltip({ active, payload }: any) {
+  return function ChartTooltip({ active, payload }: any) {
     if (!active || !payload?.length) return null
     const point: Point = payload[0].payload
     const isArtifact = artifactBelow != null && point.value != null && point.value < artifactBelow
     return (
       <div className="viz-tooltip">
         <div className="viz-tooltip-value">
-          {point.value != null ? `${point.value.toLocaleString(undefined, { maximumFractionDigits: 1 })} ${unit}` : '—'}
+          {point.value != null
+            ? `${point.value.toLocaleString('en-GB', { maximumFractionDigits: 1 })} ${unit}`
+            : 'No reading'}
         </div>
         <div className="viz-tooltip-time">{formatTick(point.startTime, spanDays, bucket)}</div>
-        {isArtifact && <div className="viz-tooltip-flag">Likely sensor artifact (motion / poor contact)</div>}
+        {isArtifact && <div className="viz-tooltip-flag">Likely a sensor artifact from motion or poor contact</div>}
       </div>
     )
   }
 }
 
-function makeDot(lastIndex: number, color: string, artifactBelow?: number) {
-  return function Dot(props: any) {
+// Only the latest point and anything flagged as an artifact get a visible dot.
+// A dot on every reading is noise at a month of per-minute data.
+function makeDot(lastIndex: number, artifactBelow?: number) {
+  // Recharts calls this per point and pushes the results straight into an
+  // array, so the key has to be set here or React warns for every dot.
+  return function ChartDot(props: any) {
     const { cx, cy, index, payload } = props
+    const key = `dot-${index}`
     if (index === lastIndex) {
-      return <circle cx={cx} cy={cy} r={4} fill={color} stroke="var(--surface-1)" strokeWidth={2} />
+      return <circle key={key} cx={cx} cy={cy} r={4} fill={SERIES} stroke="var(--surface)" strokeWidth={2} />
     }
     if (artifactBelow != null && payload?.value != null && payload.value < artifactBelow) {
-      return <circle cx={cx} cy={cy} r={3.5} fill="var(--page-plane)" stroke="var(--series-8)" strokeWidth={2} />
+      return <circle key={key} cx={cx} cy={cy} r={4} fill="var(--surface)" stroke={ARTIFACT} strokeWidth={2} />
     }
-    return <circle cx={cx} cy={cy} r={0} fill="none" />
+    return <circle key={key} cx={cx} cy={cy} r={0} fill="none" />
   }
 }
 
@@ -78,7 +91,6 @@ export default function TrendChart({
   baseUntil,
   resetKey,
   chartType = 'line',
-  seriesSlot = 1,
   transform,
   artifactBelow,
 }: {
@@ -89,21 +101,19 @@ export default function TrendChart({
   baseUntil: string
   resetKey: string
   chartType?: 'line' | 'bar'
-  seriesSlot?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8
   transform?: (value: number) => number
   artifactBelow?: number
 }) {
   const [points, setPoints] = useState<Point[] | null>(null)
   const [total, setTotal] = useState(0)
+  const [error, setError] = useState<string | null>(null)
   const [zoom, setZoom] = useState<{ since: string; until: string } | null>(null)
   const [dragStart, setDragStart] = useState<string | null>(null)
   const [dragEnd, setDragEnd] = useState<string | null>(null)
-  const color = `var(--series-${seriesSlot})`
   const { refreshToken } = useSync()
 
-  // The top-level Day/Week/Month/Custom picker owns the "base" window; each
-  // chart layers its own independent zoom on top so scrolling on one metric
-  // never disturbs the other eight. Changing the base window resets it.
+  // The range picker owns the base window and each chart layers its own zoom
+  // on top, so scrolling one metric leaves the other eight alone.
   useEffect(() => {
     setZoom(null)
   }, [resetKey])
@@ -124,6 +134,8 @@ export default function TrendChart({
 
   useEffect(() => {
     let cancelled = false
+    setError(null)
+
     const params = new URLSearchParams({
       dataType,
       bucket,
@@ -134,26 +146,38 @@ export default function TrendChart({
     })
 
     fetch(`/api/data-points?${params.toString()}`)
-      .then((r) => r.json())
+      .then(async (r) => {
+        const body = await r.json()
+        if (!r.ok) throw new Error(body?.error ?? `Request failed with ${r.status}`)
+        return body
+      })
       .then((d) => {
         if (cancelled) return
-        // The raw (unbucketed) path returns newest-first for pagination's
-        // sake; the bucketed path returns oldest-first from SQL. Sort
-        // explicitly rather than assume — a blind reverse() broke as soon
-        // as both orderings existed.
+        // The raw path returns newest first for pagination. The bucketed path
+        // returns oldest first from SQL. Sorted explicitly rather than
+        // assumed, because a blind reverse broke the moment both existed.
         const pts: Point[] = d.points
-          .map((p: any) => ({ startTime: p.startTime, value: p.value != null && transform ? transform(p.value) : p.value }))
+          .map((p: any) => ({
+            startTime: p.startTime,
+            value: p.value != null && transform ? transform(p.value) : p.value,
+          }))
           .sort((a: Point, b: Point) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
         setPoints(pts)
         setTotal(d.total)
       })
+      .catch((err: unknown) => {
+        if (cancelled) return
+        setPoints([])
+        setError(err instanceof Error ? err.message : String(err))
+      })
+
     return () => {
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataType, since, until, bucket, refreshToken])
 
-  function commitWheelZoom(factor: number) {
+  const commitWheelZoom = useCallback((factor: number) => {
     const sinceMs = new Date(sinceRef.current).getTime()
     const untilMs = new Date(untilRef.current).getTime()
     const anchorMs = hoverRef.current ? new Date(hoverRef.current).getTime() : (sinceMs + untilMs) / 2
@@ -166,16 +190,15 @@ export default function TrendChart({
       newUntil = mid + MIN_SPAN_MS / 2
     }
     setZoom({ since: new Date(newSince).toISOString(), until: new Date(newUntil).toISOString() })
-  }
+  }, [])
 
-  // React's synthetic onWheel is attached as a passive listener, so
-  // e.preventDefault() inside it is silently ignored — the page scrolls
-  // underneath the chart at the same time it tries to zoom, which is what
-  // actually made this feel broken. A manually-attached, non-passive native
-  // listener is the only way to actually stop page scroll here.
+  // React attaches onWheel as a passive listener, so preventDefault inside it
+  // is ignored and the page scrolls underneath the chart while it zooms. A
+  // manually attached non-passive listener is the only way to stop that.
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
+
     const handler = (e: WheelEvent) => {
       e.preventDefault()
       const tickFactor = e.deltaY > 0 ? 1 / WHEEL_ZOOM_FACTOR : WHEEL_ZOOM_FACTOR
@@ -187,9 +210,13 @@ export default function TrendChart({
         wheelFactorRef.current = 1
       }, WHEEL_DEBOUNCE_MS)
     }
+
     el.addEventListener('wheel', handler, { passive: false })
-    return () => el.removeEventListener('wheel', handler)
-  }, [])
+    return () => {
+      el.removeEventListener('wheel', handler)
+      if (wheelTimerRef.current) clearTimeout(wheelTimerRef.current)
+    }
+  }, [commitWheelZoom])
 
   function commitDragZoom() {
     if (dragStart && dragEnd && dragStart !== dragEnd) {
@@ -217,101 +244,103 @@ export default function TrendChart({
   const tickFmt = (iso: string) => formatTick(iso, spanDays, bucket)
   const truncated = bucket === 'none' && total > (points?.length ?? 0)
 
+  const axisProps = {
+    stroke: 'var(--ink-3)',
+    tick: { fill: 'var(--ink-3)', fontSize: 11, fontFamily: 'var(--font-mono)' },
+    tickLine: false,
+  }
+
+  const selection = dragStart && dragEnd && (
+    <ReferenceArea x1={dragStart} x2={dragEnd} fill={SERIES} fillOpacity={0.14} stroke={SERIES} strokeOpacity={0.4} />
+  )
+
   return (
-    <div className="viz-root card chart-card" style={{ borderTop: `3px solid ${color}` }} ref={containerRef}>
-      <div className="chart-header">
+    <div className="card chart-card" ref={containerRef}>
+      <div className="chart-head">
         <h3 className="card-title">{title}</h3>
-        <div className="chart-header-meta">
+        <div className="chart-head-meta">
           {truncated && (
-            <span className="muted chart-truncated">
-              Showing {points!.length.toLocaleString()} of {total.toLocaleString()}
+            <span className="chart-meta-text">
+              {points!.length.toLocaleString('en-GB')} of {total.toLocaleString('en-GB')}
             </span>
           )}
           {zoom && (
-            <button className="chart-reset-btn" onClick={() => setZoom(null)}>
+            <button type="button" className="chart-reset" onClick={() => setZoom(null)}>
               Reset zoom
             </button>
           )}
         </div>
       </div>
+
       {!points ? (
-        <div className="card-empty skeleton" />
+        <div className="skeleton" />
+      ) : error ? (
+        <div className="card-empty card-error">Could not load {title.toLowerCase()}: {error}</div>
       ) : !hasData ? (
-        <div className="card-empty">No data synced yet.</div>
+        <div className="card-empty">Nothing recorded in this window.</div>
       ) : (
-        <ResponsiveContainer width="100%" height={380}>
+        <ResponsiveContainer width="100%" height={300}>
           {chartType === 'bar' ? (
             <BarChart
               data={points}
-              margin={{ top: 8, right: 12, bottom: 0, left: 0 }}
+              margin={{ top: 6, right: 10, bottom: 0, left: 0 }}
               style={{ cursor: 'crosshair', userSelect: 'none' }}
               {...dragHandlers}
             >
-              <CartesianGrid vertical={false} stroke="var(--gridline)" strokeWidth={1} />
+              <CartesianGrid vertical={false} stroke="var(--grid)" />
               <XAxis
                 dataKey="startTime"
                 tickFormatter={tickFmt}
-                stroke="var(--muted)"
-                tick={{ fill: 'var(--muted)', fontSize: 12 }}
                 axisLine={{ stroke: 'var(--baseline)' }}
-                tickLine={false}
                 minTickGap={40}
+                {...axisProps}
               />
-              <YAxis
-                stroke="var(--muted)"
-                tick={{ fill: 'var(--muted)', fontSize: 12 }}
-                axisLine={false}
-                tickLine={false}
-                width={52}
-                tickFormatter={formatAxisNumber}
+              <YAxis width={50} axisLine={false} tickFormatter={formatAxisNumber} {...axisProps} />
+              <Tooltip
+                content={makeTooltip(unit, spanDays, bucket, artifactBelow)}
+                cursor={{ fill: 'var(--grid)' }}
               />
-              <Tooltip content={makeTooltip(unit, spanDays, bucket, artifactBelow)} cursor={{ fill: 'var(--gridline)' }} />
-              <Bar dataKey="value" fill={color} radius={[4, 4, 0, 0]} maxBarSize={28} isAnimationActive={false} />
-              {dragStart && dragEnd && (
-                <ReferenceArea x1={dragStart} x2={dragEnd} fill={color} fillOpacity={0.15} stroke={color} strokeOpacity={0.4} />
-              )}
+              <Bar dataKey="value" fill={SERIES} radius={[4, 4, 0, 0]} maxBarSize={26} isAnimationActive={false} />
+              {selection}
             </BarChart>
           ) : (
             <LineChart
               data={points}
-              margin={{ top: 8, right: 12, bottom: 0, left: 0 }}
+              margin={{ top: 6, right: 10, bottom: 0, left: 0 }}
               style={{ cursor: 'crosshair', userSelect: 'none' }}
               {...dragHandlers}
             >
-              <CartesianGrid vertical={false} stroke="var(--gridline)" strokeWidth={1} />
+              <CartesianGrid vertical={false} stroke="var(--grid)" />
               <XAxis
                 dataKey="startTime"
                 tickFormatter={tickFmt}
-                stroke="var(--muted)"
-                tick={{ fill: 'var(--muted)', fontSize: 12 }}
                 axisLine={{ stroke: 'var(--baseline)' }}
-                tickLine={false}
                 minTickGap={40}
+                {...axisProps}
               />
               <YAxis
-                stroke="var(--muted)"
-                tick={{ fill: 'var(--muted)', fontSize: 12 }}
+                width={50}
                 axisLine={false}
-                tickLine={false}
-                width={52}
                 domain={['auto', 'auto']}
                 tickFormatter={formatAxisNumber}
+                {...axisProps}
               />
-              <Tooltip content={makeTooltip(unit, spanDays, bucket, artifactBelow)} cursor={{ stroke: 'var(--baseline)', strokeWidth: 1 }} />
+              <Tooltip
+                content={makeTooltip(unit, spanDays, bucket, artifactBelow)}
+                cursor={{ stroke: 'var(--baseline)', strokeWidth: 1 }}
+              />
               <Line
                 type="monotone"
                 dataKey="value"
-                stroke={color}
+                stroke={SERIES}
                 strokeWidth={2}
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                dot={makeDot(points.length - 1, color, artifactBelow)}
+                dot={makeDot(points.length - 1, artifactBelow)}
                 isAnimationActive={false}
                 connectNulls
               />
-              {dragStart && dragEnd && (
-                <ReferenceArea x1={dragStart} x2={dragEnd} fill={color} fillOpacity={0.15} stroke={color} strokeOpacity={0.4} />
-              )}
+              {selection}
             </LineChart>
           )}
         </ResponsiveContainer>

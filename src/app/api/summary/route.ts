@@ -1,20 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { resolvePreferredSource } from '@/lib/sourcePreference'
+import { startOfToday } from '@/lib/time'
 
 export const dynamic = 'force-dynamic'
-
-// Default "today" means the local calendar day, not a rolling 24h window —
-// a rolling window double-counts across midnight. Default +60min matches
-// the utcOffset seen in this account's synced data; override via env if
-// that changes. Only used when the caller doesn't pass since/until.
-const TZ_OFFSET_MINUTES = Number(process.env.TZ_OFFSET_MINUTES ?? '60')
-
-function startOfLocalDay(offsetMinutes: number) {
-  const localNow = new Date(Date.now() + offsetMinutes * 60_000)
-  const localMidnightUtc = Date.UTC(localNow.getUTCFullYear(), localNow.getUTCMonth(), localNow.getUTCDate())
-  return new Date(localMidnightUtc - offsetMinutes * 60_000)
-}
 
 interface Metric {
   key: string
@@ -32,35 +21,46 @@ const METRICS: Metric[] = [
   { key: 'heartRate', dataType: 'heart-rate', label: 'Heart rate', mode: 'latest', unit: 'bpm' },
   { key: 'restingHeartRate', dataType: 'daily-resting-heart-rate', label: 'Resting heart rate', mode: 'latest', unit: 'bpm' },
   { key: 'hrv', dataType: 'heart-rate-variability', label: 'Heart rate variability', mode: 'latest', unit: 'ms' },
-  { key: 'spo2', dataType: 'oxygen-saturation', label: 'Blood oxygen (SpO2)', mode: 'latest', unit: '%' },
+  { key: 'spo2', dataType: 'oxygen-saturation', label: 'Blood oxygen', mode: 'latest', unit: '%' },
   { key: 'sleep', dataType: 'sleep', label: 'Sleep', mode: 'latest', unit: 'min' },
   { key: 'weight', dataType: 'weight', label: 'Weight', mode: 'latest', unit: 'kg' },
 ]
 
+const METRES_PER_KM = 1000
+
+function parseDate(value: string | null, fallback: Date): Date {
+  if (!value) return fallback
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? fallback : parsed
+}
+
 export async function GET(req: NextRequest) {
-  const sinceParam = req.nextUrl.searchParams.get('since')
-  const untilParam = req.nextUrl.searchParams.get('until')
-  const until = untilParam ? new Date(untilParam) : new Date()
-  const since = sinceParam ? new Date(sinceParam) : startOfLocalDay(TZ_OFFSET_MINUTES)
+  // Today means the local calendar day in a named time zone, not a rolling 24
+  // hours and not a fixed offset. A rolling window double counts across
+  // midnight and a fixed offset is wrong for half the year.
+  const until = parseDate(req.nextUrl.searchParams.get('until'), new Date())
+  const since = parseDate(req.nextUrl.searchParams.get('since'), startOfToday())
 
   const entries = await Promise.all(
     METRICS.map(async (m) => {
       const source = await resolvePreferredSource(m.dataType, since, until)
+      const where = {
+        dataType: m.dataType,
+        startTime: { gte: since, lt: until },
+        ...(source ? { source } : {}),
+      }
 
       if (m.mode === 'sum') {
-        const agg = await prisma.dataPoint.aggregate({
-          where: { dataType: m.dataType, startTime: { gte: since, lt: until }, ...(source ? { source } : {}) },
-          _sum: { value: true },
-        })
+        const agg = await prisma.dataPoint.aggregate({ where, _sum: { value: true } })
         let value = agg._sum.value
-        if (value != null && m.key === 'distance') value = value / 1000
+        if (value != null && m.key === 'distance') value = value / METRES_PER_KM
         return [m.key, { label: m.label, value, unit: m.unit, at: null as string | null }]
       }
 
-      // "Latest within the selected period" — a custom past range should
-      // reflect that period's most recent reading, not today's.
+      // The most recent reading inside the selected period, so a past custom
+      // range shows that period's last value rather than today's.
       const point = await prisma.dataPoint.findFirst({
-        where: { dataType: m.dataType, startTime: { gte: since, lt: until }, ...(source ? { source } : {}) },
+        where,
         orderBy: { startTime: 'desc' },
         select: { value: true, startTime: true },
       })

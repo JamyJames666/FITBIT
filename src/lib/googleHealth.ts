@@ -22,6 +22,14 @@ export const SCOPES = SCOPE_CATEGORIES.map(
 )
 
 const MAX_QUERY_DAYS = 14
+const PAGE_SIZE = 1000
+const WRITE_BATCH = 500
+
+// Google's unique key for a reading is its type, its timestamp and the device
+// that recorded it. Postgres treats every NULL as distinct under a unique
+// constraint, so a null source defeats that key and lets the same reading
+// insert again on every sync. Every write goes through this placeholder.
+const UNKNOWN_SOURCE = 'unknown'
 
 export function buildAuthUrl(redirectUri: string, state: string) {
   const params = new URLSearchParams({
@@ -54,7 +62,7 @@ export async function exchangeCodeForTokens(code: string, redirectUri: string) {
   }
   return res.json() as Promise<{
     access_token: string
-    refresh_token: string
+    refresh_token?: string
     expires_in: number
     scope: string
   }>
@@ -77,8 +85,9 @@ async function refreshAccessToken(refreshToken: string) {
   return res.json() as Promise<{ access_token: string; expires_in: number }>
 }
 
-// Returns a valid access token for the single stored Google account,
-// refreshing and persisting it first if it's expired or about to expire.
+// Refreshes and persists first if the stored token has expired or is close to
+// it. Called before every query window rather than once per data type, so a
+// long backfill cannot outlive its own token.
 export async function getValidAccessToken(): Promise<string> {
   const account = await prisma.googleAccount.findFirst({
     orderBy: { createdAt: 'desc' },
@@ -102,21 +111,13 @@ interface DataPointsResponse {
   nextPageToken?: string
 }
 
-// The `filter` query language's field path/format is data-type-specific —
-// confirmed against the live API rather than assumed, since the docs
-// undersell how much this varies per type:
-//   - Daily: `{type}.date`, plain YYYY-MM-DD, both bounds
-//   - Interval (most Interval-record types): `{type}.interval.start_time`,
-//     physical (UTC, "Z"-suffixed) time, both bounds
-//   - Civil session (sleep/exercise/hydration-log): same field name but
-//     `civil_start_time`, a LOCAL (no "Z") timestamp — using UTC-as-naive
-//     here is an approximation, good enough for windowing
-//   - ECG: only a lower bound is accepted at all ("filtering by end time is
-//     not supported"), so it gets a single-clause filter
-//   - Sample (point-in-time measurements): `{type}.sample_time.physical_time`
-// A few types (floors, calories-in-heart-rate-zone, total-calories) don't
-// support `list` at all — Google says to use `rollup`/`dailyRollup`
-// instead — so they're expected to error here until that's implemented.
+// The filter query language varies by data type. Each line below was confirmed
+// against the live API rather than taken from the docs.
+//   Daily          {type}.date, plain YYYY-MM-DD, both bounds
+//   Interval       {type}.interval.start_time, UTC with a Z suffix
+//   Civil session  same field, civil_start_time, local with no Z
+//   ECG            lower bound only, the API rejects an end time
+//   Sample         {type}.sample_time.physical_time
 const DAILY_TYPES = new Set([
   'daily-heart-rate-variability',
   'daily-heart-rate-zones',
@@ -143,6 +144,13 @@ const INTERVAL_TYPES = new Set([
 
 const CIVIL_SESSION_TYPES = new Set(['sleep', 'exercise', 'hydration-log'])
 
+// These have no list endpoint. Google directs you to the rollup API, which is
+// not implemented here, so calling them spends a request to get the same error
+// every sync.
+const NO_LIST_ENDPOINT = new Set(['floors', 'calories-in-heart-rate-zone', 'total-calories'])
+
+export const SYNCABLE_DATA_TYPES = DATA_TYPES.filter((t) => !NO_LIST_ENDPOINT.has(t))
+
 function buildFilter(dataType: DataType, start: Date, end: Date) {
   const snake = dataType.replace(/-/g, '_')
 
@@ -157,8 +165,8 @@ function buildFilter(dataType: DataType, start: Date, end: Date) {
   }
 
   if (CIVIL_SESSION_TYPES.has(dataType)) {
-    // sleep filters by when the session ENDS (the morning it's attributed
-    // to), not when it starts — confirmed against the live API.
+    // Sleep filters on when the session ends, the morning it belongs to, not
+    // when it starts. Confirmed against the live API.
     const member = dataType === 'sleep' ? 'civil_end_time' : 'civil_start_time'
     const field = `${snake}.interval.${member}`
     const fmt = (d: Date) => d.toISOString().slice(0, 19)
@@ -180,7 +188,7 @@ async function fetchDataPointsPage(
 ): Promise<DataPointsResponse> {
   const params = new URLSearchParams({
     filter: buildFilter(dataType, startTime, endTime),
-    pageSize: '1000',
+    pageSize: String(PAGE_SIZE),
   })
   if (pageToken) params.set('pageToken', pageToken)
 
@@ -209,47 +217,66 @@ function durationMinutes(interval?: { startTime?: string; endTime?: string }) {
 }
 
 function sumActiveMinutes(byLevel?: Array<{ activeMinutes?: string }>) {
-  if (!byLevel) return undefined
-  return byLevel.reduce((sum, x) => sum + Number(x.activeMinutes ?? 0), 0)
+  if (!byLevel?.length) return undefined
+  let sum = 0
+  for (const entry of byLevel) {
+    const n = Number(entry.activeMinutes ?? 0)
+    if (!Number.isFinite(n)) return undefined
+    sum += n
+  }
+  return sum
 }
 
-const num = (v: unknown) => (v == null ? undefined : Number(v))
+// Returns undefined rather than NaN for anything unparseable, so a bad field
+// never reaches a Float column where it would poison every later average.
+const num = (v: unknown) => {
+  if (v == null) return undefined
+  const n = Number(v)
+  return Number.isFinite(n) ? n : undefined
+}
 
-// Per-type value/unit extraction — confirmed against real payloads returned
-// by the live API (field names are not consistent across types: e.g.
-// distance uses `millimeters` but height uses `heightMillimeters`). Types
-// without a confirmed shape (no data yet to inspect, e.g. weight/body-fat)
-// fall through to the generic guess below.
+// Field names are not consistent across types. Distance reports millimeters
+// while height reports heightMillimeters. Each entry was read off a real
+// payload. Types with no confirmed shape fall through to the guess below.
 const VALUE_EXTRACTORS: Partial<Record<DataType, (body: any) => { value?: number; unit?: string }>> = {
   'heart-rate': (b) => ({ value: num(b.beatsPerMinute), unit: 'bpm' }),
   'daily-resting-heart-rate': (b) => ({ value: num(b.beatsPerMinute), unit: 'bpm' }),
-  'heart-rate-variability': (b) => ({ value: b.rootMeanSquareOfSuccessiveDifferencesMilliseconds, unit: 'ms' }),
-  'daily-heart-rate-variability': (b) => ({ value: b.rootMeanSquareOfSuccessiveDifferencesMilliseconds, unit: 'ms' }),
-  'oxygen-saturation': (b) => ({ value: b.percentage, unit: '%' }),
-  'daily-oxygen-saturation': (b) => ({ value: b.percentage, unit: '%' }),
+  'heart-rate-variability': (b) => ({
+    value: num(b.rootMeanSquareOfSuccessiveDifferencesMilliseconds),
+    unit: 'ms',
+  }),
+  'daily-heart-rate-variability': (b) => ({
+    value: num(b.rootMeanSquareOfSuccessiveDifferencesMilliseconds),
+    unit: 'ms',
+  }),
+  'oxygen-saturation': (b) => ({ value: num(b.percentage), unit: '%' }),
+  'daily-oxygen-saturation': (b) => ({ value: num(b.percentage), unit: '%' }),
   steps: (b) => ({ value: num(b.count), unit: 'steps' }),
-  distance: (b) => ({ value: b.millimeters != null ? num(b.millimeters)! / 1000 : undefined, unit: 'm' }),
-  height: (b) => ({ value: b.heightMillimeters != null ? num(b.heightMillimeters)! / 1000 : undefined, unit: 'm' }),
+  distance: (b) => {
+    const mm = num(b.millimeters)
+    return { value: mm == null ? undefined : mm / 1000, unit: 'm' }
+  },
+  height: (b) => {
+    const mm = num(b.heightMillimeters)
+    return { value: mm == null ? undefined : mm / 1000, unit: 'm' }
+  },
   weight: (b) => ({ value: num(b.weightKilograms ?? b.kilograms), unit: 'kg' }),
-  'body-fat': (b) => ({ value: b.percentage, unit: '%' }),
-  'active-energy-burned': (b) => ({ value: b.kcal, unit: 'kcal' }),
+  'body-fat': (b) => ({ value: num(b.percentage), unit: '%' }),
+  'active-energy-burned': (b) => ({ value: num(b.kcal), unit: 'kcal' }),
   'active-minutes': (b) => ({ value: sumActiveMinutes(b.activeMinutesByActivityLevel), unit: 'min' }),
   'active-zone-minutes': (b) => ({ value: num(b.activeZoneMinutes), unit: 'min' }),
-  'sedentary-period': (b) => ({ value: durationMinutes(b.interval), unit: 'min' }),
-  'time-in-heart-rate-zone': (b) => ({ value: durationMinutes(b.interval), unit: 'min' }),
+  'sedentary-period': (b) => ({ value: num(durationMinutes(b.interval)), unit: 'min' }),
+  'time-in-heart-rate-zone': (b) => ({ value: num(durationMinutes(b.interval)), unit: 'min' }),
   'swim-lengths-data': (b) => ({ value: num(b.strokeCount), unit: 'strokes' }),
   sleep: (b) => ({ value: num(b.summary?.minutesAsleep), unit: 'min' }),
-  exercise: (b) => ({ value: b.metricsSummary?.caloriesKcal, unit: 'kcal' }),
+  exercise: (b) => ({ value: num(b.metricsSummary?.caloriesKcal), unit: 'kcal' }),
 }
 
 function extractValue(dataType: DataType, body: Record<string, any>) {
   const known = VALUE_EXTRACTORS[dataType]?.(body)
   if (known?.value != null) return known
 
-  // Generic fallback guess for types with no confirmed shape yet.
-  if (typeof body.beatsPerMinute === 'string' || typeof body.beatsPerMinute === 'number') {
-    return { value: num(body.beatsPerMinute), unit: 'bpm' }
-  }
+  if (body.beatsPerMinute != null) return { value: num(body.beatsPerMinute), unit: 'bpm' }
   if (body.count != null) return { value: num(body.count), unit: 'count' }
   if (body.kilograms != null) return { value: num(body.kilograms), unit: 'kg' }
   if (body.percentage != null) return { value: num(body.percentage), unit: '%' }
@@ -257,62 +284,114 @@ function extractValue(dataType: DataType, body: Record<string, any>) {
   return { value: undefined, unit: undefined }
 }
 
-// Best-effort extraction so every data type is chartable without a bespoke
-// mapping for each of the 38 shapes. Falls back to the raw payload only.
-function extractFields(dataType: DataType, point: Record<string, any>) {
+function validDate(input: string | Date | undefined): Date | undefined {
+  if (!input) return undefined
+  const d = input instanceof Date ? input : new Date(input)
+  return Number.isNaN(d.getTime()) ? undefined : d
+}
+
+interface ExtractedPoint {
+  dataType: string
+  startTime: Date
+  endTime: Date | null
+  value: number | null
+  unit: string | null
+  source: string
+  raw: Record<string, any>
+}
+
+// Returns null rather than a row stamped with the current time when a payload
+// carries no usable timestamp. A fabricated timestamp lands in today's totals
+// and is indistinguishable from a real reading afterwards.
+function extractPoint(dataType: DataType, point: Record<string, any>): ExtractedPoint | null {
   const body = point[toCamelCase(dataType)] ?? {}
 
-  const startTimeRaw: string | Date | undefined =
+  const startTime = validDate(
     body.interval?.startTime ??
-    body.sampleTime?.physicalTime ??
-    dateFromParts(body.date) ??
-    point.interval?.startTime ??
-    point.startTime
+      body.sampleTime?.physicalTime ??
+      dateFromParts(body.date) ??
+      point.interval?.startTime ??
+      point.startTime
+  )
+  if (!startTime) return null
 
-  const endTimeRaw: string | Date | undefined = body.interval?.endTime ?? point.interval?.endTime ?? point.endTime
-
+  const endTime = validDate(body.interval?.endTime ?? point.interval?.endTime ?? point.endTime)
   const { value, unit } = extractValue(dataType, body)
 
   return {
-    startTime: startTimeRaw ? new Date(startTimeRaw) : new Date(),
-    endTime: endTimeRaw ? new Date(endTimeRaw) : undefined,
-    value,
-    unit,
-    source: point.dataSource?.platform,
+    dataType,
+    startTime,
+    endTime: endTime ?? null,
+    value: value != null && Number.isFinite(value) ? value : null,
+    unit: unit ?? null,
+    source: point.dataSource?.platform ?? UNKNOWN_SOURCE,
+    raw: point,
   }
 }
 
-// Syncs one data type across [since, now) in <=14-day chunks, paginating
-// each chunk, and upserts every point into the DataPoint table.
-export async function syncDataType(dataType: DataType, since: Date) {
-  const accessToken = await getValidAccessToken()
+// Rows written before source was normalised carry NULL and are invisible to
+// the unique constraint. One idempotent pass brings the history into line so
+// the constraint covers old rows as well as new ones.
+let legacyBackfillDone = false
+
+async function backfillLegacySources() {
+  if (legacyBackfillDone) return
+  await prisma.$executeRawUnsafe(
+    `UPDATE "DataPoint" SET "source" = $1 WHERE "source" IS NULL`,
+    UNKNOWN_SOURCE
+  )
+  legacyBackfillDone = true
+}
+
+export interface SyncResult {
+  written: number
+  skipped: number
+}
+
+export async function syncDataType(dataType: DataType, since: Date): Promise<SyncResult> {
+  if (NO_LIST_ENDPOINT.has(dataType)) {
+    throw new Error(`${dataType} has no list endpoint, it needs the rollup API`)
+  }
+
+  await backfillLegacySources()
+
   const now = new Date()
   let windowStart = since
-  let total = 0
+  let written = 0
+  let skipped = 0
 
   while (windowStart < now) {
     const windowEnd = new Date(
       Math.min(windowStart.getTime() + MAX_QUERY_DAYS * 86_400_000, now.getTime())
     )
+    const accessToken = await getValidAccessToken()
 
     let pageToken: string | undefined
     do {
       const page = await fetchDataPointsPage(accessToken, dataType, windowStart, windowEnd, pageToken)
+
+      // Deduplicated on the unique key before writing, because a page can
+      // carry the same reading twice and the batch insert would reject the
+      // whole statement.
+      const batch = new Map<string, ExtractedPoint>()
       for (const point of page.dataPoints ?? []) {
-        const fields = extractFields(dataType, point)
-        await prisma.dataPoint.upsert({
-          where: {
-            dataType_startTime_source: {
-              dataType,
-              startTime: fields.startTime,
-              source: fields.source ?? '',
-            },
-          },
-          create: { dataType, ...fields, source: fields.source ?? null, raw: point },
-          update: { ...fields, source: fields.source ?? null, raw: point },
-        })
-        total++
+        const row = extractPoint(dataType, point)
+        if (!row) {
+          skipped++
+          continue
+        }
+        batch.set(`${row.startTime.toISOString()}|${row.source}`, row)
       }
+
+      const rows = Array.from(batch.values())
+      for (let i = 0; i < rows.length; i += WRITE_BATCH) {
+        const result = await prisma.dataPoint.createMany({
+          data: rows.slice(i, i + WRITE_BATCH),
+          skipDuplicates: true,
+        })
+        written += result.count
+      }
+
       pageToken = page.nextPageToken || undefined
     } while (pageToken)
 
@@ -325,12 +404,14 @@ export async function syncDataType(dataType: DataType, since: Date) {
     update: { lastSyncedAt: now },
   })
 
-  return total
+  return { written, skipped }
 }
 
-export async function syncAllDataTypes(defaultSince: Date) {
-  const results: Record<string, number | { error: string }> = {}
-  for (const dataType of DATA_TYPES) {
+export type SyncReport = Record<string, SyncResult | { error: string }>
+
+export async function syncAllDataTypes(defaultSince: Date): Promise<SyncReport> {
+  const results: SyncReport = {}
+  for (const dataType of SYNCABLE_DATA_TYPES) {
     const state = await prisma.syncState.findUnique({ where: { dataType } })
     const since = state?.lastSyncedAt ?? defaultSince
     try {
